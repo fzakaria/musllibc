@@ -30,6 +30,8 @@ static size_t ldso_page_size;
 
 #include "libc.h"
 
+#include "sqlite3.h"
+
 #define malloc __libc_malloc
 #define calloc __libc_calloc
 #define realloc __libc_realloc
@@ -1789,6 +1791,44 @@ void __dls2b(size_t *sp, size_t *auxv)
 	else ((stage3_func)laddr(&ldso, dls3_def.sym->st_value))(sp, auxv);
 }
 
+// Function to find a section by name in an ELF binary
+// Parameters:
+// - ehdr: Pointer to the ELF header
+// - section_name: Name of the section to find
+// Returns: Pointer to the section header, or NULL if the section is not found
+const ElfW(Shdr)* find_section_by_name(const ElfW(Ehdr)* ehdr, const char* section_name) {
+    // Pointer to the first section header
+    const ElfW(Shdr)* shdrs = (const ElfW(Shdr)*)((const char*)ehdr + ehdr->e_shoff);
+    
+	// Validate e_shstrndx
+    if (ehdr->e_shstrndx >= ehdr->e_shnum) {
+        // Invalid section header string table index
+		dprintf(2, "Invalid section header string table index\n");
+        return NULL;
+    }
+
+    // Pointer to the section header string table
+    const char* strtab = (const char*)ehdr + shdrs[ehdr->e_shstrndx].sh_offset;
+    
+	// Validate strtab
+    if (!strtab) {
+        // Invalid section header string table pointer
+		dprintf(2, "Invalid string table\n");
+        return NULL;
+    }
+
+    // Iterate through the section headers to find the desired section
+    for (int i = 0; i < ehdr->e_shnum; i++) {
+        if (strcmp(section_name, strtab + shdrs[i].sh_name) == 0) {
+            // Return pointer to the section header
+            return &shdrs[i];
+        }
+    }
+    
+    // Section not found
+    return NULL;
+}
+
 /* Stage 3 of the dynamic linker is called with the dynamic linker/libc
  * fully functional. Its job is to load (if not already loaded) and
  * process dependencies and relocations for the main application and
@@ -1948,6 +1988,67 @@ void __dls3(size_t *sp, size_t *auxv)
 		}
 		argv[-3] = (void *)app.loadmap;
 	}
+
+	int fd = open(app.name, O_RDONLY);
+	if (fd < 0) {
+        dprintf(2, "failed to open");
+        _exit(1);
+    }
+
+	struct stat st;
+    fstat(fd, &st);
+    const ElfW(Ehdr)* ehdr = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (ehdr == MAP_FAILED) {
+        dprintf(2, "failed to mmap");
+        _exit(1);
+    }
+
+	if (!ehdr || memcmp(ehdr->e_ident, ELFMAG, SELFMAG) != 0) {
+		dprintf(2, "Not a valid elf file\n");
+		_exit(1);
+    }
+
+	const ElfW(Shdr)* section_header = find_section_by_name(ehdr, ".sqlelf");
+	if (section_header == NULL) {
+		dprintf(2, "Cannot find .sqlelf section\n");
+		_exit(1);
+	}
+
+	void *section_data = (char *)ehdr + section_header->sh_offset;
+	size_t section_size = section_header->sh_size;
+
+	// let's verify it's a sqlite database
+	char * SQLITE_HEADER_STRING = "SQLite format 3";
+	if (memcmp(section_data, SQLITE_HEADER_STRING, strlen(SQLITE_HEADER_STRING)) != 0) {
+		dprintf(2, "Not a valid sqlite database\n");
+		_exit(1);
+	}
+
+	sqlite3 *db;    
+    int rc = sqlite3_open("test.db", &db);
+    
+    if (rc != SQLITE_OK) {
+        dprintf(2, "Cannot open database: %s\n", sqlite3_errmsg(db));
+        _exit(1);
+    }
+
+	rc = sqlite3_deserialize(db, "main", section_data, section_size, section_size,
+                                SQLITE_DESERIALIZE_READONLY | SQLITE_DESERIALIZE_RESIZEABLE);
+	if (rc != SQLITE_OK) {
+        dprintf(2, "Cannot deserialize database: %s\n", sqlite3_errmsg(db));
+        _exit(1);
+	}
+
+	char * sql = "SELECT COUNT(*) FROM ELF_SYMBOLS";
+	int rows, columns;
+	char **result;
+
+	rc = sqlite3_get_table(db, sql, &result, &rows, &columns, NULL);
+    if (rc != SQLITE_OK) {
+        dprintf(2, "Failed to execute query[%d]: %s\n", rc, sqlite3_errmsg(db));
+        _exit(1);
+    }
+	dprintf(2, "Number of rows in table: %s\n", result[columns]);
 
 	/* Initial dso chain consists only of the app. */
 	head = tail = syms_tail = &app;
