@@ -519,6 +519,105 @@ static void do_relocs(struct dso *dso, size_t *rel, size_t rel_size, size_t stri
 	}
 }
 
+// Function to find a section by name in an ELF binary
+// Parameters:
+// - ehdr: Pointer to the ELF header
+// - section_name: Name of the section to find
+// Returns: Pointer to the section header, or NULL if the section is not found
+const ElfW(Shdr)* find_section_by_name(const ElfW(Ehdr)* ehdr, const char* section_name) {
+	// Pointer to the first section header
+	const ElfW(Shdr)* shdrs = (const ElfW(Shdr)*)((const char*)ehdr + ehdr->e_shoff);
+	
+	// Validate e_shstrndx
+	if (ehdr->e_shstrndx >= ehdr->e_shnum) {
+		// Invalid section header string table index
+		dprintf(2, "Invalid section header string table index\n");
+		return NULL;
+	}
+
+	// Pointer to the section header string table
+	const char* strtab = (const char*)ehdr + shdrs[ehdr->e_shstrndx].sh_offset;
+	
+	// Validate strtab
+	if (!strtab) {
+		// Invalid section header string table pointer
+		dprintf(2, "Invalid string table\n");
+		return NULL;
+	}
+
+	// Iterate through the section headers to find the desired section
+	for (int i = 0; i < ehdr->e_shnum; i++) {
+		if (strcmp(section_name, strtab + shdrs[i].sh_name) == 0) {
+			// Return pointer to the section header
+			return &shdrs[i];
+		}
+	}
+	
+	// Section not found
+	return NULL;
+}
+
+/**
+ * @brief Given a pointer p to the mmap area of a file, find
+ * the section header of a section with name 'sqlelf' and load
+ * it as sqlite database
+ */
+static sqlite3* load_sqlite(void * p)
+{
+	const ElfW(Ehdr)* ehdr = (const ElfW(Ehdr)*)p;
+	/**
+	 * Sanity check if it's an ELF file actually.
+	 */
+	if (!ehdr || memcmp(ehdr->e_ident, ELFMAG, SELFMAG) != 0) {
+		dprintf(2, "Not a valid elf file\n");
+		return NULL;
+	}
+
+	/**
+	 * Find our special .sqlelf section by name.
+	 */
+	const ElfW(Shdr)* section_header = find_section_by_name(ehdr, ".sqlelf");
+	if (section_header == NULL) {
+		dprintf(2, "Cannot find .sqlelf section\n");
+		return NULL;
+	}
+
+	void *section_data = (char *)ehdr + section_header->sh_offset;
+	size_t section_size = section_header->sh_size;
+
+	/**
+	 * Sanity check that the section data is in fact a SQLite database.
+	 */
+	char * SQLITE_HEADER_STRING = "SQLite format 3";
+	if (memcmp(section_data, SQLITE_HEADER_STRING, strlen(SQLITE_HEADER_STRING)) != 0) {
+		dprintf(2, "Not a valid sqlite database\n");
+		return NULL;
+	}
+
+	sqlite3 *db;    
+	int rc = sqlite3_open(":memory:", &db);
+	
+	if (rc != SQLITE_OK) {
+		dprintf(2, "Cannot open database: %s\n", sqlite3_errmsg(db));
+		return NULL;
+	}
+
+	/**
+	 * Deserialize the database into memory.
+	 * The database must not be using WAL journal_mode when in read-only.
+	 * Be sure PRAGMA journal_mode=DELETE prior to burning an SQLite database image onto read-only media
+	 * https://www.sqlite.org/wal.html
+	 */
+	rc = sqlite3_deserialize(db, "main", section_data, section_size, section_size,
+								SQLITE_DESERIALIZE_READONLY | SQLITE_DESERIALIZE_RESIZEABLE);
+	if (rc != SQLITE_OK) {
+		dprintf(2, "Cannot deserialize database: %s\n", sqlite3_errmsg(db));
+		return NULL;
+	}
+
+	return db;
+}
+
 static void do_relr_relocs(struct dso *dso, size_t *relr, size_t relr_size)
 {
 	if (dso == &ldso) return; /* self-relocation was done in _dlstart */
@@ -815,6 +914,23 @@ static int path_open(const char *name, const char *s, char *buf, size_t buf_size
 	}
 }
 
+static int fixup_rpath_sql() {
+	return 0;
+}
+
+/**
+ * This function fixes up the run-time search path for a dynamic shared object.
+ * 
+ * @param p A pointer to the dynamic shared object.
+ * @param buf A pointer to the buffer to store the fixed-up path.
+ * @param buf_size The size of the buffer.
+ * 
+ * @return Returns 0 on success, or -1 on failure.
+ *
+ * The fixed-up path may include the special string "$ORIGIN", which is replaced with the directory containing
+ * the dynamic shared object at runtime. This allows the dynamic shared object to be located relative to its
+ * containing directory, rather than requiring an absolute path.
+ */
 static int fixup_rpath(struct dso *p, char *buf, size_t buf_size)
 {
 	size_t n, l;
@@ -1024,7 +1140,11 @@ static struct dso *load_library(const char *name, struct dso *needed_by)
 		fd = -1;
 		if (env_path) fd = path_open(name, env_path, buf, sizeof buf);
 		for (p=needed_by; fd == -1 && p; p=p->needed_by) {
-			if (fixup_rpath(p, buf, sizeof buf) < 0)
+			dprintf(2, "rpath original: %s\n", p->rpath_orig);
+			int rc = fixup_rpath(p, buf, sizeof buf);
+			int rc = fixup_rpath_sql(p);
+			dprintf(2, "rpath fixup: %s\n", p->rpath);
+			if (rc < 0)
 				fd = -2; /* Inhibit further search. */
 			if (p->rpath)
 				fd = path_open(name, p->rpath, buf, sizeof buf);
@@ -1158,6 +1278,10 @@ static struct dso *load_library(const char *name, struct dso *needed_by)
 	tail = p;
 
 	if (ldd_mode) dprintf(1, "\t%s => %s (%p)\n", name, pathname, p->base);
+	
+	sqlite3* db = load_sqlite(map);
+	// Store it on this DSO
+	p->db = db;
 
 	return p;
 }
@@ -1677,44 +1801,6 @@ void __dls2b(size_t *sp, size_t *auxv)
 	((stage3_func)laddr(&ldso, dls3_def.sym->st_value))(sp, auxv);
 }
 
-// Function to find a section by name in an ELF binary
-// Parameters:
-// - ehdr: Pointer to the ELF header
-// - section_name: Name of the section to find
-// Returns: Pointer to the section header, or NULL if the section is not found
-const ElfW(Shdr)* find_section_by_name(const ElfW(Ehdr)* ehdr, const char* section_name) {
-	// Pointer to the first section header
-	const ElfW(Shdr)* shdrs = (const ElfW(Shdr)*)((const char*)ehdr + ehdr->e_shoff);
-	
-	// Validate e_shstrndx
-	if (ehdr->e_shstrndx >= ehdr->e_shnum) {
-		// Invalid section header string table index
-		dprintf(2, "Invalid section header string table index\n");
-		return NULL;
-	}
-
-	// Pointer to the section header string table
-	const char* strtab = (const char*)ehdr + shdrs[ehdr->e_shstrndx].sh_offset;
-	
-	// Validate strtab
-	if (!strtab) {
-		// Invalid section header string table pointer
-		dprintf(2, "Invalid string table\n");
-		return NULL;
-	}
-
-	// Iterate through the section headers to find the desired section
-	for (int i = 0; i < ehdr->e_shnum; i++) {
-		if (strcmp(section_name, strtab + shdrs[i].sh_name) == 0) {
-			// Return pointer to the section header
-			return &shdrs[i];
-		}
-	}
-	
-	// Section not found
-	return NULL;
-}
-
 /* Stage 3 of the dynamic linker is called with the dynamic linker/libc
  * fully functional. Its job is to load (if not already loaded) and
  * process dependencies and relocations for the main application and
@@ -1877,59 +1963,14 @@ void __dls3(size_t *sp, size_t *auxv)
 	 */
 	struct stat st;
 	fstat(fd, &st);
-	const ElfW(Ehdr)* ehdr = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-	if (ehdr == MAP_FAILED) {
+	void* p = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+	if (p == MAP_FAILED) {
 		dprintf(2, "failed to mmap");
 		_exit(1);
 	}
 
-	/**
-	 * Sanity check if it's an ELF file actually.
-	 */
-	if (!ehdr || memcmp(ehdr->e_ident, ELFMAG, SELFMAG) != 0) {
-		dprintf(2, "Not a valid elf file\n");
-		_exit(1);
-	}
-
-	/**
-	 * Find our special .sqlelf section by name.
-	 */
-	const ElfW(Shdr)* section_header = find_section_by_name(ehdr, ".sqlelf");
-	if (section_header == NULL) {
-		dprintf(2, "Cannot find .sqlelf section\n");
-		_exit(1);
-	}
-
-	void *section_data = (char *)ehdr + section_header->sh_offset;
-	size_t section_size = section_header->sh_size;
-
-	/**
-	 * Sanity check that the section data is in fact a SQLite database.
-	 */
-	char * SQLITE_HEADER_STRING = "SQLite format 3";
-	if (memcmp(section_data, SQLITE_HEADER_STRING, strlen(SQLITE_HEADER_STRING)) != 0) {
-		dprintf(2, "Not a valid sqlite database\n");
-		_exit(1);
-	}
-
-	sqlite3 *db;    
-	int rc = sqlite3_open(":memory:", &db);
-	
-	if (rc != SQLITE_OK) {
-		dprintf(2, "Cannot open database: %s\n", sqlite3_errmsg(db));
-		_exit(1);
-	}
-
-	/**
-	 * Deserialize the database into memory.
-	 * The database must not be using WAL journal_mode when in read-only.
-	 * Be sure PRAGMA journal_mode=DELETE prior to burning an SQLite database image onto read-only media
-	 * https://www.sqlite.org/wal.html
-	 */
-	rc = sqlite3_deserialize(db, "main", section_data, section_size, section_size,
-								SQLITE_DESERIALIZE_READONLY | SQLITE_DESERIALIZE_RESIZEABLE);
-	if (rc != SQLITE_OK) {
-		dprintf(2, "Cannot deserialize database: %s\n", sqlite3_errmsg(db));
+	sqlite3 * db = load_sqlite(p);
+	if (!db) {
 		_exit(1);
 	}
 
