@@ -61,14 +61,13 @@ struct td_index {
 };
 
 struct dso {
-#if DL_FDPIC
-	struct fdpic_loadmap *loadmap;
-#else
 	unsigned char *base;
-#endif
 	char *name;
 	size_t *dynv;
 	struct dso *next, *prev;
+
+	// SQLite database
+	sqlite3 * db;
 
 	Phdr *phdr;
 	int phnum;
@@ -103,11 +102,7 @@ struct dso {
 	struct td_index *td_index;
 	struct dso *fini_next;
 	char *shortname;
-#if DL_FDPIC
-	unsigned char *base;
-#else
 	struct fdpic_loadmap *loadmap;
-#endif
 	struct funcdesc {
 		void *addr;
 		size_t *got;
@@ -154,8 +149,6 @@ static struct dso *builtin_deps[2];
 static struct dso *const no_deps[1];
 static struct dso *builtin_ctor_queue[4];
 static struct dso **main_ctor_queue;
-static struct fdpic_loadmap *app_loadmap;
-static struct fdpic_dummy_loadmap app_dummy_loadmap;
 
 struct debug *_dl_debug_addr = &debug;
 
@@ -176,42 +169,9 @@ static int dl_strcmp(const char *l, const char *r)
 #define strcmp(l,r) dl_strcmp(l,r)
 
 /* Compute load address for a virtual address in a given dso. */
-#if DL_FDPIC
-static void *laddr(const struct dso *p, size_t v)
-{
-	size_t j=0;
-	if (!p->loadmap) return p->base + v;
-	for (j=0; v-p->loadmap->segs[j].p_vaddr >= p->loadmap->segs[j].p_memsz; j++);
-	return (void *)(v - p->loadmap->segs[j].p_vaddr + p->loadmap->segs[j].addr);
-}
-static void *laddr_pg(const struct dso *p, size_t v)
-{
-	size_t j=0;
-	size_t pgsz = PAGE_SIZE;
-	if (!p->loadmap) return p->base + v;
-	for (j=0; ; j++) {
-		size_t a = p->loadmap->segs[j].p_vaddr;
-		size_t b = a + p->loadmap->segs[j].p_memsz;
-		a &= -pgsz;
-		b += pgsz-1;
-		b &= -pgsz;
-		if (v-a<b-a) break;
-	}
-	return (void *)(v - p->loadmap->segs[j].p_vaddr + p->loadmap->segs[j].addr);
-}
-static void (*fdbarrier(void *p))()
-{
-	void (*fd)();
-	__asm__("" : "=r"(fd) : "0"(p));
-	return fd;
-}
-#define fpaddr(p, v) fdbarrier((&(struct funcdesc){ \
-	laddr(p, v), (p)->got }))
-#else
 #define laddr(p, v) (void *)((p)->base + (v))
 #define laddr_pg(p, v) laddr(p, v)
 #define fpaddr(p, v) ((void (*)())laddr(p, v))
-#endif
 
 static void decode_vec(size_t *v, size_t *a, size_t cnt)
 {
@@ -754,46 +714,6 @@ static void *map_library(int fd, struct dso *dso)
 		}
 	}
 	if (!dyn) goto noexec;
-	if (DL_FDPIC && !(eh->e_flags & FDPIC_CONSTDISP_FLAG)) {
-		dso->loadmap = calloc(1, sizeof *dso->loadmap
-			+ nsegs * sizeof *dso->loadmap->segs);
-		if (!dso->loadmap) goto error;
-		dso->loadmap->nsegs = nsegs;
-		for (ph=ph0, i=0; i<nsegs; ph=(void *)((char *)ph+eh->e_phentsize)) {
-			if (ph->p_type != PT_LOAD) continue;
-			prot = (((ph->p_flags&PF_R) ? PROT_READ : 0) |
-				((ph->p_flags&PF_W) ? PROT_WRITE: 0) |
-				((ph->p_flags&PF_X) ? PROT_EXEC : 0));
-			map = mmap(0, ph->p_memsz + (ph->p_vaddr & PAGE_SIZE-1),
-				prot, MAP_PRIVATE,
-				fd, ph->p_offset & -PAGE_SIZE);
-			if (map == MAP_FAILED) {
-				unmap_library(dso);
-				goto error;
-			}
-			dso->loadmap->segs[i].addr = (size_t)map +
-				(ph->p_vaddr & PAGE_SIZE-1);
-			dso->loadmap->segs[i].p_vaddr = ph->p_vaddr;
-			dso->loadmap->segs[i].p_memsz = ph->p_memsz;
-			i++;
-			if (prot & PROT_WRITE) {
-				size_t brk = (ph->p_vaddr & PAGE_SIZE-1)
-					+ ph->p_filesz;
-				size_t pgbrk = brk + PAGE_SIZE-1 & -PAGE_SIZE;
-				size_t pgend = brk + ph->p_memsz - ph->p_filesz
-					+ PAGE_SIZE-1 & -PAGE_SIZE;
-				if (pgend > pgbrk && mmap_fixed(map+pgbrk,
-					pgend-pgbrk, prot,
-					MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,
-					-1, off_start) == MAP_FAILED)
-					goto error;
-				memset(map + brk, 0, pgbrk-brk);
-			}
-		}
-		map = (void *)dso->loadmap->segs[0].addr;
-		map_len = 0;
-		goto done_mapping;
-	}
 	addr_max += PAGE_SIZE-1;
 	addr_max &= -PAGE_SIZE;
 	addr_min &= -PAGE_SIZE;
@@ -856,7 +776,6 @@ static void *map_library(int fd, struct dso *dso)
 				goto error;
 			break;
 		}
-done_mapping:
 	dso->base = base;
 	dso->dynv = laddr(dso, dyn);
 	if (dso->tls.size) dso->tls.image = laddr(dso, tls_image);
@@ -993,6 +912,33 @@ static void decode_dyn(struct dso *p)
 		p->versym = laddr(p, *dyn);
 }
 
+/**
+ * Count the number of symbols using a SQLite database connection
+ */
+static size_t count_syms_sql(struct dso *p, sqlite3 *db) {
+	char * path = basename(p->name);
+	char sql[1024];
+	snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM ELF_SYMBOLS WHERE section = 'undefined' AND PATH = '%s';", path);
+    sqlite3_stmt *stmt;
+    
+    // Preparing the SQL statement
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        dprintf(2, "Failed to prepare statement: %s\n", sqlite3_errmsg(db));
+        return -1;
+    }
+    
+    // Stepping through the statement to execute it
+    if (sqlite3_step(stmt) != SQLITE_ROW) {
+		dprintf(2, "Failed to execute statement: %s\n", sqlite3_errmsg(db));
+		return -1;
+    }
+	size_t count = sqlite3_column_int(stmt, 0);
+    // Finalizing the statement to avoid memory leaks
+    sqlite3_finalize(stmt);
+    
+    return count;
+}
+
 static size_t count_syms(struct dso *p)
 {
 	if (p->hashtab) return p->hashtab[1];
@@ -1010,46 +956,6 @@ static size_t count_syms(struct dso *p)
 		while (!(*hashval++ & 1));
 	}
 	return nsym;
-}
-
-static void *dl_mmap(size_t n)
-{
-	void *p;
-	int prot = PROT_READ|PROT_WRITE, flags = MAP_ANONYMOUS|MAP_PRIVATE;
-#ifdef SYS_mmap2
-	p = (void *)__syscall(SYS_mmap2, 0, n, prot, flags, -1, 0);
-#else
-	p = (void *)__syscall(SYS_mmap, 0, n, prot, flags, -1, 0);
-#endif
-	return (unsigned long)p > -4096UL ? 0 : p;
-}
-
-static void makefuncdescs(struct dso *p)
-{
-	static int self_done;
-	size_t nsym = count_syms(p);
-	size_t i, size = nsym * sizeof(*p->funcdescs);
-
-	if (!self_done) {
-		p->funcdescs = dl_mmap(size);
-		self_done = 1;
-	} else {
-		p->funcdescs = malloc(size);
-	}
-	if (!p->funcdescs) {
-		if (!runtime) a_crash();
-		error("Error allocating function descriptors for %s", p->name);
-		longjmp(*rtld_fail, 1);
-	}
-	for (i=0; i<nsym; i++) {
-		if ((p->syms[i].st_info&0xf)==STT_FUNC && p->syms[i].st_shndx) {
-			p->funcdescs[i].addr = laddr(p, p->syms[i].st_value);
-			p->funcdescs[i].got = p->got;
-		} else {
-			p->funcdescs[i].addr = 0;
-			p->funcdescs[i].got = 0;
-		}
-	}
 }
 
 static struct dso *load_library(const char *name, struct dso *needed_by)
@@ -1250,8 +1156,6 @@ static struct dso *load_library(const char *name, struct dso *needed_by)
 	tail->next = p;
 	p->prev = tail;
 	tail = p;
-
-	if (DL_FDPIC) makefuncdescs(p);
 
 	if (ldd_mode) dprintf(1, "\t%s => %s (%p)\n", name, pathname, p->base);
 
@@ -1712,21 +1616,7 @@ hidden void __dls2(unsigned char *base, size_t *sp)
 	size_t *auxv;
 	for (auxv=sp+1+*sp+1; *auxv; auxv++);
 	auxv++;
-	if (DL_FDPIC) {
-		void *p1 = (void *)sp[-2];
-		void *p2 = (void *)sp[-1];
-		if (!p1) {
-			size_t aux[AUX_CNT];
-			decode_vec(auxv, aux, AUX_CNT);
-			if (aux[AT_BASE]) ldso.base = (void *)aux[AT_BASE];
-			else ldso.base = (void *)(aux[AT_PHDR] & -4096);
-		}
-		app_loadmap = p2 ? p1 : 0;
-		ldso.loadmap = p2 ? p2 : p1;
-		ldso.base = laddr(&ldso, 0);
-	} else {
-		ldso.base = base;
-	}
+	ldso.base = base;
 	Ehdr *ehdr = (void *)ldso.base;
 	ldso.name = ldso.shortname = "libc.so";
 	ldso.phnum = ehdr->e_phnum;
@@ -1735,8 +1625,6 @@ hidden void __dls2(unsigned char *base, size_t *sp)
 	search_vec(auxv, &ldso_page_size, AT_PAGESZ);
 	kernel_mapped_dso(&ldso);
 	decode_dyn(&ldso);
-
-	if (DL_FDPIC) makefuncdescs(&ldso);
 
 	/* Prepare storage for to save clobbered REL addends so they
 	 * can be reused in stage 3. There should be very few. If
@@ -1763,8 +1651,7 @@ hidden void __dls2(unsigned char *base, size_t *sp)
 	 * symbolically as a barrier against moving the address
 	 * load across the above relocation processing. */
 	struct symdef dls2b_def = find_sym(&ldso, "__dls2b", 0);
-	if (DL_FDPIC) ((stage3_func)&ldso.funcdescs[dls2b_def.sym-ldso.syms])(sp, auxv);
-	else ((stage3_func)laddr(&ldso, dls2b_def.sym->st_value))(sp, auxv);
+	((stage3_func)laddr(&ldso, dls2b_def.sym->st_value))(sp, auxv);
 }
 
 /* Stage 2b sets up a valid thread pointer, which requires relocations
@@ -1787,8 +1674,7 @@ void __dls2b(size_t *sp, size_t *auxv)
 	}
 
 	struct symdef dls3_def = find_sym(&ldso, "__dls3", 0);
-	if (DL_FDPIC) ((stage3_func)&ldso.funcdescs[dls3_def.sym-ldso.syms])(sp, auxv);
-	else ((stage3_func)laddr(&ldso, dls3_def.sym->st_value))(sp, auxv);
+	((stage3_func)laddr(&ldso, dls3_def.sym->st_value))(sp, auxv);
 }
 
 // Function to find a section by name in an ELF binary
@@ -1888,7 +1774,6 @@ void __dls3(size_t *sp, size_t *auxv)
 				app.tls.align = phdr->p_align;
 			}
 		}
-		if (DL_FDPIC) app.loadmap = app_loadmap;
 		if (app.tls.size) app.tls.image = laddr(&app, tls_image);
 		if (interp_off) ldso.name = laddr(&app, interp_off);
 		if ((aux[0] & (1UL<<AT_EXECFN))
@@ -1976,19 +1861,6 @@ void __dls3(size_t *sp, size_t *auxv)
 		tls_align = MAXP2(tls_align, app.tls.align);
 	}
 	decode_dyn(&app);
-	if (DL_FDPIC) {
-		makefuncdescs(&app);
-		if (!app.loadmap) {
-			app.loadmap = (void *)&app_dummy_loadmap;
-			app.loadmap->nsegs = 1;
-			app.loadmap->segs[0].addr = (size_t)app.map;
-			app.loadmap->segs[0].p_vaddr = (size_t)app.map
-				- (size_t)app.base;
-			app.loadmap->segs[0].p_memsz = app.map_len;
-		}
-		argv[-3] = (void *)app.loadmap;
-	}
-
 
 	/**
 	 * This is the code necessary to read the sqlite section in the ELF file.
@@ -2061,16 +1933,14 @@ void __dls3(size_t *sp, size_t *auxv)
 		_exit(1);
 	}
 
-	char * sql = "SELECT COUNT(*) FROM ELF_SYMBOLS";
-	int rows, columns;
-	char **result;
+	// Store it on this DSO
+	app.db = db;
 
-	rc = sqlite3_get_table(db, sql, &result, &rows, &columns, NULL);
-	if (rc != SQLITE_OK) {
-		dprintf(2, "Failed to execute query[%d]: %s\n", rc, sqlite3_errmsg(db));
-		_exit(1);
-	}
-	dprintf(2, "Number of rows in table: %s\n", result[columns]);
+	size_t expected_count = count_syms(&app);
+	size_t sql_count = count_syms_sql(&app, db);
+	dprintf(2, "expected count: %d\n", expected_count);
+	dprintf(2, "sql count: %d\n", sql_count);
+	//assert(expected_count == sql_count);
 
 	/* Initial dso chain consists only of the app. */
 	head = tail = syms_tail = &app;
@@ -2357,32 +2227,18 @@ hidden int __dl_invalid_handle(void *h)
 static void *addr2dso(size_t a)
 {
 	struct dso *p;
-	size_t i;
-	if (DL_FDPIC) for (p=head; p; p=p->next) {
-		i = count_syms(p);
-		if (a-(size_t)p->funcdescs < i*sizeof(*p->funcdescs))
-			return p;
-	}
 	for (p=head; p; p=p->next) {
-		if (DL_FDPIC && p->loadmap) {
-			for (i=0; i<p->loadmap->nsegs; i++) {
-				if (a-p->loadmap->segs[i].p_vaddr
-				    < p->loadmap->segs[i].p_memsz)
-					return p;
-			}
-		} else {
-			Phdr *ph = p->phdr;
-			size_t phcnt = p->phnum;
-			size_t entsz = p->phentsize;
-			size_t base = (size_t)p->base;
-			for (; phcnt--; ph=(void *)((char *)ph+entsz)) {
-				if (ph->p_type != PT_LOAD) continue;
-				if (a-base-ph->p_vaddr < ph->p_memsz)
-					return p;
-			}
-			if (a-(size_t)p->map < p->map_len)
-				return 0;
+		Phdr *ph = p->phdr;
+		size_t phcnt = p->phnum;
+		size_t entsz = p->phentsize;
+		size_t base = (size_t)p->base;
+		for (; phcnt--; ph=(void *)((char *)ph+entsz)) {
+			if (ph->p_type != PT_LOAD) continue;
+			if (a-base-ph->p_vaddr < ph->p_memsz)
+				return p;
 		}
+		if (a-(size_t)p->map < p->map_len)
+			return 0;
 	}
 	return 0;
 }
@@ -2407,8 +2263,6 @@ static void *do_dlsym(struct dso *p, const char *s, void *ra)
 	}
 	if ((def.sym->st_info&0xf) == STT_TLS)
 		return __tls_get_addr((tls_mod_off_t []){def.dso->tls_id, def.sym->st_value-DTP_OFFSET});
-	if (DL_FDPIC && (def.sym->st_info&0xf) == STT_FUNC)
-		return def.dso->funcdescs + (def.sym - def.dso->syms);
 	return laddr(def.dso, def.sym->st_value);
 }
 
@@ -2430,17 +2284,8 @@ int dladdr(const void *addr_arg, Dl_info *info)
 
 	sym = p->syms;
 	strings = p->strings;
-	nsym = count_syms(p);
 
-	if (DL_FDPIC) {
-		size_t idx = (addr-(size_t)p->funcdescs)
-			/ sizeof(*p->funcdescs);
-		if (idx < nsym && (sym[idx].st_info&0xf) == STT_FUNC) {
-			best = (size_t)(p->funcdescs + idx);
-			bestsym = sym + idx;
-			besterr = 0;
-		}
-	}
+	nsym = count_syms(p);
 
 	if (!best) for (; nsym; nsym--, sym++) {
 		if (sym->st_value
@@ -2471,8 +2316,6 @@ int dladdr(const void *addr_arg, Dl_info *info)
 		return 1;
 	}
 
-	if (DL_FDPIC && (bestsym->st_info&0xf) == STT_FUNC)
-		best = (size_t)(p->funcdescs + (bestsym - p->syms));
 	info->dli_sname = strings + bestsym->st_name;
 	info->dli_saddr = (void *)best;
 
