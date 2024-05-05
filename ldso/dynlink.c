@@ -22,6 +22,7 @@
 #include "pthread_impl.h"
 #include "fork_impl.h"
 #include "dynlink.h"
+#include "sqlite3.h"
 
 // fzakaria: Used for timing information
 #include <time.h>
@@ -439,7 +440,7 @@ void* custom_alloc(int fd, size_t size) {
     return ptr;
 }
 
-static void do_relocs(struct dso *dso, size_t *rel, size_t rel_size, size_t stride, CachedRelocInfo * cached_reloc_infos, size_t * reloc_count)
+static void do_relocs(struct dso *dso, size_t *rel, size_t rel_size, size_t stride, sqlite3 * db)
 {
 	unsigned char *base = dso->base;
 	Sym *syms = dso->syms;
@@ -462,6 +463,17 @@ static void do_relocs(struct dso *dso, size_t *rel, size_t rel_size, size_t stri
     double find_sym_total_time = 0.0;  // Total time spent in find_sym
 
 	debug_print("Performing relocations for %s\n", dso->name);
+
+	sqlite3_stmt *stmt;
+	if (db != NULL) {
+		char * sql = "INSERT INTO relocation_entries (type, symbol_value, dso_name, dso_symbol_name, offset) VALUES (?, ?, ?, ?, ?)";
+		int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+		if (rc != SQLITE_OK) {
+			dprintf(2, "Error preparing insert: %s\n", sqlite3_errmsg(db));
+			if (runtime) longjmp(*rtld_fail, 1);
+			return;
+		}
+	}
 
 	// fzakaria: If we are doing relocs for libc
 	// We can't even call this function!
@@ -556,13 +568,24 @@ static void do_relocs(struct dso *dso, size_t *rel, size_t rel_size, size_t stri
 
 			// Store relocation info
 			// Some symbols like _ITM_registerTMCloneTable aren't found since they seem special to GCC
-			if (cached_reloc_infos != NULL && def.sym != NULL) {
-				cached_reloc_infos[*reloc_count].type = R_TYPE(rel[1]);
-				cached_reloc_infos[*reloc_count].st_value = def.sym->st_value;
-				strcpy(cached_reloc_infos[*reloc_count].dso_name, dso->name);
-				strcpy(cached_reloc_infos[*reloc_count].symbol_dso_name, def.dso->name);
-				cached_reloc_infos[*reloc_count].offset = rel[0];
-				(*reloc_count)++;
+			if (db != NULL && def.sym != NULL) {
+
+				sqlite3_bind_int(stmt, 1, R_TYPE(rel[1]));
+				sqlite3_bind_int64(stmt, 2, def.sym->st_value);
+				sqlite3_bind_text(stmt, 3, dso->name, strlen(dso->name), SQLITE_STATIC);
+				sqlite3_bind_text(stmt, 4, def.dso->name, strlen(def.dso->name), SQLITE_STATIC);
+				sqlite3_bind_int64(stmt, 5, rel[0]);
+
+				int rc = sqlite3_step(stmt);
+				if (rc != SQLITE_DONE) {
+					dprintf(2, "Error inserting relocation entry: %s\n", sqlite3_errmsg(db));
+					if (runtime) longjmp(*rtld_fail, 1);
+					continue;
+				}
+
+				sqlite3_clear_bindings(stmt);
+				sqlite3_reset(stmt);
+
 			}
 
 		} else {
@@ -715,7 +738,7 @@ static void redo_lazy_relocs()
 		next = p->lazy_next;
 		size_t size = p->lazy_cnt*3*sizeof(size_t);
 		p->lazy_cnt = 0;
-		do_relocs(p, p->lazy, size, 3, NULL, NULL);
+		do_relocs(p, p->lazy, size, 3, NULL);
 		if (p->lazy_cnt) {
 			p->lazy_next = lazy_head;
 			lazy_head = p;
@@ -1452,62 +1475,8 @@ static void do_mips_relocs(struct dso *p, size_t *got)
 	rel[0] = (unsigned char *)got - base;
 	for (i-=j; i; i--, sym++, rel[0]+=sizeof(size_t)) {
 		rel[1] = R_INFO(sym-p->syms, R_MIPS_JUMP_SLOT);
-		do_relocs(p, rel, sizeof rel, 2, NULL, NULL);
+		do_relocs(p, rel, sizeof rel, 2, NULL);
 	}
-}
-
-static size_t total_relocs(struct dso *p) {
-	size_t dyn[DYN_CNT];
-	size_t total_size = 0;
-	
-	for (; p; p=p->next) {
-		decode_vec(p->dynv, dyn, DYN_CNT);
-		size_t total_dso_size = (dyn[DT_PLTRELSZ] / ((2+(dyn[DT_PLTREL]==DT_RELA)) * sizeof(size_t)) ) +
-							    (dyn[DT_RELSZ] / (2 * sizeof(size_t))) +
-								(dyn[DT_RELASZ] / (3 * sizeof(size_t))) +
-								(dyn[DT_RELRSZ] / sizeof(size_t));
-		total_size += total_dso_size;
-	}
-	return total_size;
-}
-
-static CachedRelocInfo* load_relo_cache(struct dso *app, size_t *num_relocs) {
-	/**
-	 * This is the code necessary to read the sqlite section in the ELF file.
-	 * We have to re-open the file because the section is not in a loadable segment.
-	 */
-	int fd = open(app->name, O_RDONLY);
-	if (fd < 0) {
-		dprintf(2, "failed to open %s", app->name);
-		_exit(1);
-	}
-
-	/**
-	 * Figure out the size of the file so that we can mmap it.
-	 */
-	struct stat st;
-	fstat(fd, &st);
-	void* p = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-	if (p == MAP_FAILED) {
-		dprintf(2, "failed to mmap for load_relo_cache");
-		_exit(1);
-	}
-	const ElfW(Ehdr)* ehdr = (const ElfW(Ehdr)*)p;
-    const ElfW(Shdr)* shdrs = (const ElfW(Shdr)*)((const char*)ehdr + ehdr->e_shoff);
-    const char *strings = (const char*)ehdr + shdrs[ehdr->e_shstrndx].sh_offset;
-
-    for (int i = 0; i < ehdr->e_shnum; i++) {
-        if (strcmp(strings + shdrs[i].sh_name, ".reloc.cache") == 0) {
-            size_t section_size = shdrs[i].sh_size;
-            *num_relocs = section_size / sizeof(CachedRelocInfo);
-
-            CachedRelocInfo *reloc_info = (CachedRelocInfo *)((char *)ehdr + shdrs[i].sh_offset);
-            return reloc_info;
-        }
-    }
-
-    *num_relocs = 0;
-    return NULL;
 }
 
 // Find the DSO whose name matches the given argument.
@@ -1523,21 +1492,32 @@ static struct dso *find_dso(struct dso *dso, const char *name) {
 	return NULL;
 }
 
-static void reloc_symbols_from_cache(struct dso *dso, const CachedRelocInfo * cached_reloc_infos, size_t reloc_count)
+static void reloc_symbols_from_sqlite(struct dso *dso, sqlite3 * db)
 {
-	for (size_t i = 0; i < reloc_count; i++) {
-		const CachedRelocInfo *cached_reloc_info = &cached_reloc_infos[i];
+	sqlite3_stmt *stmt;
+	int rc = sqlite3_prepare_v2(db, "SELECT type, offset, symbol_value, dso_name, dso_symbol_name FROM relocation_entries", -1, &stmt, NULL);
+	if (rc != SQLITE_OK) {
+		error("Error preparing statement: %s\n", sqlite3_errmsg(db));
+		if (runtime) longjmp(*rtld_fail, 1);
+		return;
+	}
 
-		int type = R_TYPE(cached_reloc_info->type);
+	while (sqlite3_step(stmt) != SQLITE_DONE) {
+		int type = R_TYPE(sqlite3_column_int(stmt, 0));
+		size_t offset = sqlite3_column_int64(stmt, 1);
+		size_t symbol_value = sqlite3_column_int64(stmt, 2);
+		const char *dso_name = (const char *)sqlite3_column_text(stmt, 3);
+		const char *symbol_dso_name = (const char *)sqlite3_column_text(stmt, 4);
+
 		if (type == REL_NONE) continue;
 
 		// fzakaria: too verbose
 		// debug_print("Relocating symbol from %s in DSO %s\n", cached_reloc_info->symbol_dso_name, cached_reloc_info->dso_name);
-		struct dso *reloc_def_dso = find_dso(dso, cached_reloc_info->dso_name);
-		size_t *reloc_addr = laddr(reloc_def_dso, cached_reloc_info->offset);
+		struct dso *reloc_def_dso = find_dso(dso, dso_name);
+		size_t *reloc_addr = laddr(reloc_def_dso, offset);
 		size_t addend = 0; //addend for REL_PLT always 0
-		struct dso *symbol_def_dso = find_dso(dso, cached_reloc_info->symbol_dso_name);
-		size_t sym_val = (size_t)laddr(symbol_def_dso, cached_reloc_info->st_value);
+		struct dso *symbol_def_dso = find_dso(dso, symbol_dso_name);
+		size_t sym_val = (size_t)laddr(symbol_def_dso, symbol_value);
 
 		switch(type) {
 		case REL_SYMBOLIC:
@@ -1552,10 +1532,17 @@ static void reloc_symbols_from_cache(struct dso *dso, const CachedRelocInfo * ca
 			continue;
 		}
 	}
+
+	rc = sqlite3_finalize(stmt);
+	if (rc != SQLITE_OK) {
+		error("Error finalizing statement: %s\n", sqlite3_errmsg(db));
+		if (runtime) longjmp(*rtld_fail, 1);
+		return;
+	}
 }
 
 
-static void reloc_all(struct dso *p, CachedRelocInfo * cached_reloc_infos, size_t * reloc_count)
+static void reloc_all(struct dso *p, sqlite3 *db)
 {
 	size_t dyn[DYN_CNT];
 	for (; p; p=p->next) {
@@ -1566,11 +1553,11 @@ static void reloc_all(struct dso *p, CachedRelocInfo * cached_reloc_infos, size_
 
 		debug_print("About to start DT_JMPREL relocations for %s\n", p->name);
 		do_relocs(p, laddr(p, dyn[DT_JMPREL]), dyn[DT_PLTRELSZ],
-			2+(dyn[DT_PLTREL]==DT_RELA), cached_reloc_infos, reloc_count);
+			2+(dyn[DT_PLTREL]==DT_RELA), db);
 		debug_print("About to start DT_REL relocations for %s\n", p->name);
-		do_relocs(p, laddr(p, dyn[DT_REL]), dyn[DT_RELSZ], 2, cached_reloc_infos, reloc_count);
+		do_relocs(p, laddr(p, dyn[DT_REL]), dyn[DT_RELSZ], 2, db);
 		debug_print("About to start DT_RELA relocations for %s\n", p->name);
-		do_relocs(p, laddr(p, dyn[DT_RELA]), dyn[DT_RELASZ], 3, cached_reloc_infos, reloc_count);
+		do_relocs(p, laddr(p, dyn[DT_RELA]), dyn[DT_RELASZ], 3, db);
 		debug_print("About to start DT_RELR relocations for %s\n", p->name);
 		do_relr_relocs(p, laddr(p, dyn[DT_RELR]), dyn[DT_RELRSZ]);
 
@@ -1894,7 +1881,7 @@ hidden void __dls2(unsigned char *base, size_t *sp)
 
 	head = &ldso;
 
-	reloc_all(&ldso, NULL, NULL);
+	reloc_all(&ldso, NULL);
 
 	ldso.relocated = 0;
 
@@ -2149,60 +2136,82 @@ void __dls3(size_t *sp, size_t *auxv)
 			_exit(127);
 		}
 	}
+
 	static_tls_cnt = tls_cnt;
-	size_t reloc_count = 0;
-	size_t num_relocs = 0;
-	CachedRelocInfo *cached_reloc_infos = NULL;
-	int cache_fd = -1;
+
+	sqlite3 * db = NULL;
 	if (is_reloc_write()) {
-		num_relocs = total_relocs(&app);
-		debug_print("Total relocations: %zu\n", num_relocs);
 
-		cache_fd = open("relo.bin", O_CREAT | O_RDWR | O_APPEND | O_TRUNC, S_IRUSR | S_IWUSR);
-		if (cache_fd == -1) {
-			int err = errno;
-			debug_print("Failed to open cache file: %s\n", strerror(err));
+		// SQLite database
+		int rc = sqlite3_open("reloc.sqlite", &db);
+		if (rc != SQLITE_OK) {
+			dprintf(2, "Cannot open database: %s\n", sqlite3_errmsg(db));
 			if (runtime) longjmp(*rtld_fail, 1);
-			return;
+			return;		
 		}
-		
-		size_t file_cache_size = num_relocs * sizeof(CachedRelocInfo);
-		ftruncate(cache_fd, file_cache_size);
-		// To keep track of how many relocations we store
-		cached_reloc_infos = custom_alloc(cache_fd, file_cache_size);
-		if (num_relocs > 0 && !cached_reloc_infos) {
-			error("Failed to allocate memory for cached relocation infos.\n");
-			if (runtime) longjmp(*rtld_fail, 1);
-			return;
-		}
-	}
 
-	if (is_reloc_read()) {
-		// We expect the cache to only be present on the main application
-		// so load it from there
-		cached_reloc_infos = load_relo_cache(&app, &num_relocs);
-		if (!cached_reloc_infos) {
-			error("Failed to read cached relocation infos.\n");
+		// Create the relocation table
+		const char *sql = "CREATE TABLE relocation_entries("  \
+						"type INT," \
+						"offset INT," \
+						"symbol_value INT," \
+						"dso_symbol_name TEXT," \
+						"dso_name TEXT );";
+
+		// Execute SQL statement
+		rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+		if (rc != SQLITE_OK) {
+			dprintf(2, "Error creating table: %s\n", sqlite3_errmsg(db));
+			sqlite3_close(db);
 			if (runtime) longjmp(*rtld_fail, 1);
 			return;
 		}
-		debug_print("Loaded %zu cached relocations\n", num_relocs);
-		reloc_symbols_from_cache(&app, cached_reloc_infos, num_relocs);
+
+		rc = sqlite3_exec(db, "BEGIN TRANSACTION;", NULL, NULL, NULL);
+		if (rc != SQLITE_OK) {
+			dprintf(2, "Error starting transaction: %s\n", sqlite3_errmsg(db));
+			sqlite3_close(db);
+			if (runtime) longjmp(*rtld_fail, 1);
+			return;
+		}
+
+		/* The main program must be relocated LAST since it may contain
+		* copy relocations which depend on libraries' relocations. */
+		reloc_all(app.next, db);
+		reloc_all(&app, db);
+
+		rc = sqlite3_exec(db, "COMMIT TRANSACTION;", NULL, NULL, NULL);
+		if (rc != SQLITE_OK) {
+			dprintf(2, "Error commiting transaction: %s\n", sqlite3_errmsg(db));
+			sqlite3_close(db);
+			if (runtime) longjmp(*rtld_fail, 1);
+			return;
+		}
+
+		sqlite3_close(db);
+	} else if (is_reloc_read()) {
+
+		// SQLite database
+		// TODO(fzakaria): This could be a section off the file instead
+		int rc = sqlite3_open("reloc.sqlite", &db);
+		if (rc != SQLITE_OK) {
+			dprintf(2, "Cannot open database: %s\n", sqlite3_errmsg(db));
+			if (runtime) longjmp(*rtld_fail, 1);
+			return;		
+		}
+
+		reloc_symbols_from_sqlite(&app, db);
 
 		/* Do the remaining relocations */
-		reloc_all(app.next, NULL, &reloc_count);
-		reloc_all(&app, NULL, &reloc_count);
+		reloc_all(app.next, NULL);
+		reloc_all(&app, NULL);
+
+		sqlite3_close(db);
 	} else {
 		/* The main program must be relocated LAST since it may contain
 		* copy relocations which depend on libraries' relocations. */
-		reloc_all(app.next, cached_reloc_infos, &reloc_count);
-		reloc_all(&app, cached_reloc_infos, &reloc_count);
-	}
-
-	// Cleanup
-	if (is_reloc_write()) {
-		munmap(cached_reloc_infos, num_relocs * sizeof(CachedRelocInfo));
-		close(cache_fd);
+		reloc_all(app.next, NULL);
+		reloc_all(&app, NULL);
 	}
 
 	/* Actual copying to new TLS needs to happen after relocations,
@@ -2370,7 +2379,7 @@ void *dlopen(const char *file, int mode)
 			add_syms(p->deps[i]);
 	}
 	if (!p->relocated) {
-		reloc_all(p, NULL, NULL);
+		reloc_all(p, NULL);
 	}
 
 	/* If RTLD_GLOBAL was not specified, undo any new additions
