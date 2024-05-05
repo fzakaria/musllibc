@@ -2193,14 +2193,30 @@ void __dls3(size_t *sp, size_t *auxv)
 
 		// SQLite database
 		// TODO(fzakaria): This could be a section off the file instead
-		int rc = sqlite3_open("reloc.sqlite", &db);
+		int rc = sqlite3_open("file:reloc.sqlite?mode=ro&nolock=1", &db);
 		if (rc != SQLITE_OK) {
 			dprintf(2, "Cannot open database: %s\n", sqlite3_errmsg(db));
 			if (runtime) longjmp(*rtld_fail, 1);
 			return;		
 		}
 
+		rc = sqlite3_exec(db, "BEGIN TRANSACTION;", NULL, NULL, NULL);
+		if (rc != SQLITE_OK) {
+			dprintf(2, "Error starting transaction: %s\n", sqlite3_errmsg(db));
+			sqlite3_close(db);
+			if (runtime) longjmp(*rtld_fail, 1);
+			return;
+		}
+
 		reloc_symbols_from_sqlite(&app, db);
+
+		rc = sqlite3_exec(db, "END TRANSACTION;", NULL, NULL, NULL);
+		if (rc != SQLITE_OK) {
+			dprintf(2, "Error commiting transaction: %s\n", sqlite3_errmsg(db));
+			sqlite3_close(db);
+			if (runtime) longjmp(*rtld_fail, 1);
+			return;
+		}
 
 		/* Do the remaining relocations */
 		reloc_all(app.next, NULL);
