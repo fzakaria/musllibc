@@ -2,7 +2,7 @@
 lib.recurseIntoAttrs {
   benchmark-1000000_functions =
     writeShellScriptBin "run-1000000_functions-benchmark" ''
-      ${hyperfine}/bin/hyperfine --warmup 3 --runs 10 \
+      ${hyperfine}/bin/hyperfine --warmup 3 --runs 100 \
               'RELOC_READ=1 ${examples.patched_functions}/bin/1000000_functions  &>/dev/null' \
               '${examples.patched_functions}/bin/1000000_functions  &>/dev/null' --export-json benchmark.json
     '';
