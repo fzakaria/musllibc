@@ -1602,7 +1602,6 @@ static void reloc_symbols_from_cache(struct dso *app, const CachedRelocInfo * ca
 			continue;
 		}
 	}
-    free(dso_table);
 }
 
 
