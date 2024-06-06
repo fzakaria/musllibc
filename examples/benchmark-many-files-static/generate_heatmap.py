@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import pandas as pd
 import plotnine as p9
+import mizani
 
 # Load the benchmark data
 data = pd.read_csv("benchmark_results.csv")
@@ -28,6 +29,9 @@ heatmap = (
         mid="white",
         high="green",
         midpoint=1,
+        limits = (0, 2),
+        breaks = False,
+        oob = mizani.bounds.squish
     )
     + p9.geom_text(p9.aes(label="median_speedup"), size=9, show_legend=False)
     + p9.theme(  # new
