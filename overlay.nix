@@ -19,4 +19,8 @@ self: super:
       });
   
   mpi = self.openmpi;
+
+
+  # Unstable has some Musl fixes we want to pull in 
+  CoinMP = super.unstable.CoinMP;
 }

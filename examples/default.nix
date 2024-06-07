@@ -1,5 +1,5 @@
 { openssh, musl, patchelf, libffi, ruby, patchExecutable, wrapCC, llvmPackages, enableDebugging, python3
-, stdenv, fetchFromGitHub, openmpi, makeWrapper, lib }:
+, stdenv, fetchFromGitHub, openmpi, makeWrapper, lib, libreoffice }:
 lib.recurseIntoAttrs rec {
   patched_ruby = let
     # for some reason on pkgMusl this is hanging?...
@@ -9,6 +9,8 @@ lib.recurseIntoAttrs rec {
     });
     modified_ruby = enableDebugging (ruby.override { libffi = libffi; });
   in patchExecutable.individual { executable = modified_ruby; };
+
+  libreoffice_musl = libreoffice;
 
   patched_clang =
     wrapCC (patchExecutable.individual { executable = llvmPackages.clang.cc; });
