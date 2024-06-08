@@ -57,9 +57,10 @@ self: super: {
       ];
     });
 
-  libreoffice-unwrapped = (super.unstable.libreoffice.unwrapped.override {
+  libreoffice-unwrapped = (super.unstable.pkgsMusl.libreoffice.unwrapped.override {
     withHelp = false;
   }).overrideAttrs (finalAttrs: previousAttrs: {
+    doCheck = false;
     configureFlags =
       super.lib.remove "--enable-dbus" previousAttrs.configureFlags;
     # NIX_DEBUG = 7;
@@ -71,4 +72,5 @@ self: super: {
   libreoffice-still = super.libreoffice-still.override ({
     unwrapped = self.libreoffice-unwrapped;
   });
+  libreoffice = self.libreoffice-still;
 }
