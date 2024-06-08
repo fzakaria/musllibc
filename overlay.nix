@@ -57,18 +57,19 @@ self: super: {
       ];
     });
 
-  libreoffice-unwrapped = (super.unstable.pkgsMusl.libreoffice.unwrapped.override {
-    withHelp = false;
-  }).overrideAttrs (finalAttrs: previousAttrs: {
-    doCheck = false;
-    configureFlags =
-      super.lib.remove "--enable-dbus" previousAttrs.configureFlags;
-    # NIX_DEBUG = 7;
-    buildInputs = super.lib.lists.subtractLists ([
-      super.dbus-glib
-      super.gst_all_1.gst-plugins-bad
-    ]) previousAttrs.buildInputs;
-  });
+  libreoffice-unwrapped =
+    (super.unstable.pkgsMusl.libreoffice.unwrapped.override {
+      withHelp = false;
+    }).overrideAttrs (finalAttrs: previousAttrs: {
+      doCheck = false;
+      configureFlags =
+        super.lib.remove "--enable-dbus" previousAttrs.configureFlags;
+      # NIX_DEBUG = 7;
+      buildInputs = super.lib.lists.subtractLists ([
+        super.dbus-glib
+        super.gst_all_1.gst-plugins-bad
+      ]) previousAttrs.buildInputs;
+    });
   libreoffice-still = super.libreoffice-still.override ({
     unwrapped = self.libreoffice-unwrapped;
   });
