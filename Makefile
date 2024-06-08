@@ -237,4 +237,7 @@ distclean: clean
 fmt:
 	find . -name "*.nix" | xargs nixfmt
 
-.PHONY: all clean install install-libs install-headers install-tools fmt
+cachix:
+	nix-store -qR --include-outputs $(nix build -f default.nix --json --no-link -L --max-jobs auto  | jq -r '.[].drvPath') | grep -v '\.drv$' | cachix push fzakaria
+
+.PHONY: all clean install install-libs install-headers install-tools fmt cachix
