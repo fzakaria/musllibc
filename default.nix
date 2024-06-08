@@ -2,18 +2,14 @@ let
   # Consider setting enableParallelBuildingByDefault = true; in your configuration.nix
   # It will likely cause a mass rebuild.
   pkgs_unstable = import (fetchTarball
-  "https://github.com/NixOS/nixpkgs/archive/818dbe2f96df233d2041739d6079bb616d3e5597.tar.gz") {
+    "https://github.com/NixOS/nixpkgs/archive/818dbe2f96df233d2041739d6079bb616d3e5597.tar.gz")
+    {
 
-  };
+    };
   pkgs = import (fetchTarball
     "https://github.com/NixOS/nixpkgs/archive/nixos-23.11.tar.gz") {
-      overlays = [
-        (self: super:
-          {
-            unstable = pkgs_unstable;
-          })
-        (import ./overlay.nix)  
-      ];
+      overlays =
+        [ (self: super: { unstable = pkgs_unstable; }) (import ./overlay.nix) ];
     };
   lib = pkgs.lib;
   # taken from https://nix.dev/tutorials/callpackage

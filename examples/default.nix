@@ -1,5 +1,6 @@
-{ openssh, musl, patchelf, libffi, ruby, patchExecutable, wrapCC, llvmPackages, enableDebugging, python3
-, stdenv, fetchFromGitHub, openmpi, makeWrapper, lib, libreoffice }:
+{ openssh, musl, patchelf, libffi, ruby, patchExecutable, wrapCC, llvmPackages
+, enableDebugging, python3, stdenv, fetchFromGitHub, openmpi, makeWrapper, lib
+, libreoffice }:
 lib.recurseIntoAttrs rec {
   patched_ruby = let
     # for some reason on pkgMusl this is hanging?...
@@ -27,7 +28,8 @@ lib.recurseIntoAttrs rec {
       hash = "sha256-5npWRktvH4luT4qw6z0BJr/twQLu+2HvJ4g8cai11LA=";
     };
     sourceRoot = "${src.name}/pynamic-pyMPI-2.6a1";
-    buildInputs = [ (python3.withPackages(ps: [ ps.mpi4py ]))  openmpi makeWrapper ];
+    buildInputs =
+      [ (python3.withPackages (ps: [ ps.mpi4py ])) openmpi makeWrapper ];
 
     configurePhase = ''
       # do nothing
@@ -62,17 +64,17 @@ lib.recurseIntoAttrs rec {
   patched_pynamic = stdenv.mkDerivation {
     name = "patched_pynamic";
     phases = "installPhase";
-    buildInputs = [ patchelf musl pynamic makeWrapper openssh];
+    buildInputs = [ patchelf musl pynamic makeWrapper openssh ];
     installPhase = ''
-        mkdir -p $out/bin
-        patchelf --set-interpreter ${musl}/lib/libc.so ${pynamic}/bin/pynamic-mpi4py --output $out/bin/pynamic-mpi4py
-        PYTHONPATH="${pynamic}/lib:${pynamic}/bin" RELOC_WRITE=1 $out/bin/pynamic-mpi4py -v
-        cp relo.bin $out/bin/pynamic-mpi4py.relo
-        objcopy --add-section .reloc.cache=relo.bin \
-                --set-section-flags .reloc.cache=noload,readonly $out/bin/pynamic-mpi4py
-        
-        makeWrapper $out/bin/pynamic-mpi4py $out/bin/pynamic-mpi4py-wrapped \
-                    --set PYTHONPATH "${pynamic}/lib:${pynamic}/bin"
+      mkdir -p $out/bin
+      patchelf --set-interpreter ${musl}/lib/libc.so ${pynamic}/bin/pynamic-mpi4py --output $out/bin/pynamic-mpi4py
+      PYTHONPATH="${pynamic}/lib:${pynamic}/bin" RELOC_WRITE=1 $out/bin/pynamic-mpi4py -v
+      cp relo.bin $out/bin/pynamic-mpi4py.relo
+      objcopy --add-section .reloc.cache=relo.bin \
+              --set-section-flags .reloc.cache=noload,readonly $out/bin/pynamic-mpi4py
+
+      makeWrapper $out/bin/pynamic-mpi4py $out/bin/pynamic-mpi4py-wrapped \
+                  --set PYTHONPATH "${pynamic}/lib:${pynamic}/bin"
     '';
   };
 }
