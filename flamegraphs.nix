@@ -3,7 +3,7 @@ lib.recurseIntoAttrs rec {
 
   baseline = binary:
     writeShellScriptBin "create-flamegraph" ''
-      perf record -F 300 -g -a --user-callchains -- ${binary} > /dev/null
+      perf record -F 1000 -g -a --user-callchains -- ${binary} > /dev/null
       perf script > out.perf
       ${flamegraph}/bin/stackcollapse-perf.pl out.perf > out.perf-folded
       grep _dlstart_c out.perf-folded > _dlstart_c-out.perf-folded
@@ -13,7 +13,7 @@ lib.recurseIntoAttrs rec {
 
   modified = binary:
     writeShellScriptBin "create-flamegraph" ''
-      RELOC_READ=1 perf record -F 300 -g -a --user-callchains -- ${binary} > /dev/null
+      RELOC_READ=1 perf record -F 1000 -g -a --user-callchains -- ${binary} > /dev/null
       perf script > out.perf
       ${flamegraph}/bin/stackcollapse-perf.pl out.perf > out.perf-folded
       grep _dlstart out.perf-folded > _dlstart-out.perf-folded
@@ -31,4 +31,8 @@ lib.recurseIntoAttrs rec {
   pynamic_modified =
     modified "${examples.patched_pynamic}/bin/pynamic-mpi4py-wrapped";
 
+  libreoffice_baseline = baseline
+    "${examples.patched_libreoffice}/lib/libreoffice/program/soffice-patched.bin --help";
+  libreoffice_modified = modified
+    "${examples.patched_libreoffice}/lib/libreoffice/program/soffice-patched.bin --help";
 }

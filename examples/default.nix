@@ -1,6 +1,6 @@
 { openssh, musl, patchelf, libffi, ruby, patchExecutable, wrapCC, llvmPackages
 , enableDebugging, python3, stdenv, fetchFromGitHub, openmpi, makeWrapper, lib
-, libreoffice, libreoffice-unwrapped }:
+, libreoffice, libreoffice-unwrapped, symlinkJoin, binutils }:
 lib.recurseIntoAttrs rec {
   patched_ruby = let
     # for some reason on pkgMusl this is hanging?...
@@ -12,6 +12,19 @@ lib.recurseIntoAttrs rec {
   in patchExecutable.individual { executable = modified_ruby; };
 
   libreoffice_musl = libreoffice-unwrapped;
+
+  patched_libreoffice = symlinkJoin {
+    name = "patched_libreoffice";
+    paths = [ libreoffice_musl ];
+    buildInputs = [ binutils patchelf musl ];
+    postBuild = ''
+      patchelf --set-interpreter ${musl}/lib/libc.so $out/lib/libreoffice/program/soffice.bin --output $out/lib/libreoffice/program/soffice-patched.bin
+      RELOC_WRITE=1 $out/lib/libreoffice/program/soffice-patched.bin --help &> /dev/null
+      cp relo.bin $out/lib/libreoffice/program/soffice-patched.relo
+      objcopy --add-section .reloc.cache=relo.bin \
+              --set-section-flags .reloc.cache=noload,readonly $out/lib/libreoffice/program/soffice-patched.bin
+    '';
+  };
 
   patched_clang =
     wrapCC (patchExecutable.individual { executable = llvmPackages.clang.cc; });

@@ -7,6 +7,24 @@ lib.recurseIntoAttrs {
               '${examples.patched_functions}/bin/1000000_functions  &>/dev/null' --export-json benchmark.json
     '';
 
+  benchmark-libreoffice = writeShellScriptBin "run-libreoffice-benchmark" ''
+    ${hyperfine}/bin/hyperfine --warmup 3 --runs 100 \
+            'RELOC_READ=1 ${examples.patched_libreoffice}/lib/libreoffice/program/soffice-patched.bin --help' \
+            '${examples.patched_libreoffice}/lib/libreoffice/program/soffice-patched.bin --help' --export-json benchmark.json
+  '';
+
+  benchmark-clang = writeShellScriptBin "run-clang-benchmark" ''
+    ${hyperfine}/bin/hyperfine --warmup 3 --runs 100 \
+            'RELOC_READ=1 ${examples.patched_clang}/bin/clang --help' \
+            '${examples.patched_clang}/bin/clang --help' --export-json benchmark.json
+  '';
+
+  benchmark-pynamic = writeShellScriptBin "run-pynamic-benchmark" ''
+    ${hyperfine}/bin/hyperfine --warmup 2 --runs 3 \
+            'RELOC_READ=1 ${examples.patched_pynamic}/bin/pynamic-mpi4py-wrapped' \
+            '${examples.patched_pynamic}/bin/pynamic-mpi4py-wrapped' --export-json benchmark.json
+  '';
+
   benchark-multiple-functions-per-shared-object =
     writeShellScriptBin "run-multiple-functions-per-shared-object-benchmark" ''
       # Output file for CSV results
