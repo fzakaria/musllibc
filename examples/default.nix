@@ -81,13 +81,11 @@ lib.recurseIntoAttrs rec {
     installPhase = ''
       mkdir -p $out/bin
       patchelf --set-interpreter ${musl}/lib/libc.so ${pynamic}/bin/pynamic-mpi4py --output $out/bin/pynamic-mpi4py
-      PYTHONPATH="${pynamic}/lib:${pynamic}/bin" RELOC_WRITE=1 $out/bin/pynamic-mpi4py -v
-      cp relo.bin $out/bin/pynamic-mpi4py.relo
-      objcopy --add-section .reloc.cache=relo.bin \
-              --set-section-flags .reloc.cache=noload,readonly $out/bin/pynamic-mpi4py
-
-      makeWrapper $out/bin/pynamic-mpi4py $out/bin/pynamic-mpi4py-wrapped \
-                  --set PYTHONPATH "${pynamic}/lib:${pynamic}/bin"
+      PYTHONPATH="${pynamic}/lib:${pynamic}/bin" RELOC_WRITE=pynamic-mpi4py_relo.bin $out/bin/pynamic-mpi4py -v
+      cp pynamic-mpi4py_relo.bin $out/bin/pynamic-mpi4py_relo.bin
+      makeWrapper $out/bin/pynamic-mpi4py $out/bin/pynamic-mpi4py-optimized \
+                  --set PYTHONPATH "${pynamic}/lib:${pynamic}/bin" \
+                  --set RELOC_READ "$out/bin/pynamic-mpi4py_relo.bin"
     '';
   };
 }
