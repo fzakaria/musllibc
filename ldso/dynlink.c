@@ -129,20 +129,36 @@ static inline void debug_print(const char *format, ...) {
     }
 }
 
+static inline const char* reloc_write() {
+    static const char* reloc_write_value = NULL;
+    static int checked = 0;
+    
+    if (!checked) {
+        reloc_write_value = getenv("RELOC_WRITE");
+        checked = 1;
+    }
+    
+    return reloc_write_value;
+}
+
 static inline int is_reloc_write() {
-	static volatile int reloc_write_env_exists = -1;
-	if (reloc_write_env_exists == -1) {
-		reloc_write_env_exists = getenv("RELOC_WRITE") != NULL;
-	}
-	return reloc_write_env_exists == 1;
+    return reloc_write() != NULL;
+}
+
+static inline const char* reloc_read() {
+    static const char* reloc_read_value = NULL;
+    static int checked = 0;
+    
+    if (!checked) {
+        reloc_read_value = getenv("RELOC_READ");
+        checked = 1;
+    }
+    
+    return reloc_read_value;
 }
 
 static inline int is_reloc_read() {
-	static volatile int reloc_read_env_exists = -1;
-	if (reloc_read_env_exists == -1) {
-		reloc_read_env_exists = getenv("RELOC_READ") != NULL;
-	}
-	return reloc_read_env_exists == 1;
+	return reloc_read() != NULL;
 }
 
 struct debug {
@@ -1497,14 +1513,14 @@ static size_t total_relocs(struct dso *p) {
 	return total_size;
 }
 
-static CachedRelocInfo* load_relo_cache(struct dso *app, size_t *num_relocs) {
+static CachedRelocInfo* load_relo_cache(size_t *num_relocs) {
 	/**
 	 * This is the code necessary to read the sqlite section in the ELF file.
 	 * We have to re-open the file because the section is not in a loadable segment.
 	 */
-	int fd = open(app->name, O_RDONLY);
+	int fd = open(reloc_read(), O_RDONLY);
 	if (fd < 0) {
-		dprintf(2, "failed to open %s", app->name);
+		dprintf(2, "failed to open %s", reloc_read());
 		_exit(1);
 	}
 
@@ -1518,22 +1534,11 @@ static CachedRelocInfo* load_relo_cache(struct dso *app, size_t *num_relocs) {
 		dprintf(2, "failed to mmap for load_relo_cache");
 		_exit(1);
 	}
-	const ElfW(Ehdr)* ehdr = (const ElfW(Ehdr)*)p;
-    const ElfW(Shdr)* shdrs = (const ElfW(Shdr)*)((const char*)ehdr + ehdr->e_shoff);
-    const char *strings = (const char*)ehdr + shdrs[ehdr->e_shstrndx].sh_offset;
 
-    for (int i = 0; i < ehdr->e_shnum; i++) {
-        if (strcmp(strings + shdrs[i].sh_name, ".reloc.cache") == 0) {
-            size_t section_size = shdrs[i].sh_size;
-            *num_relocs = section_size / sizeof(CachedRelocInfo);
+	CachedRelocInfo *reloc_info = (CachedRelocInfo *)((char *) p);
+	*num_relocs = st.st_size / sizeof(CachedRelocInfo);
 
-            CachedRelocInfo *reloc_info = (CachedRelocInfo *)((char *)ehdr + shdrs[i].sh_offset);
-            return reloc_info;
-        }
-    }
-
-    *num_relocs = 0;
-    return NULL;
+	return reloc_info;
 }
 
 /**
@@ -2208,7 +2213,7 @@ void __dls3(size_t *sp, size_t *auxv)
 		num_relocs = total_relocs(&app);
 		debug_print("Total relocations: %zu\n", num_relocs);
 
-		cache_fd = open("relo.bin", O_CREAT | O_RDWR | O_APPEND | O_TRUNC, S_IRUSR | S_IWUSR);
+		cache_fd = open(reloc_write(), O_CREAT | O_RDWR | O_APPEND | O_TRUNC, S_IRUSR | S_IWUSR);
 		if (cache_fd == -1) {
 			int err = errno;
 			debug_print("Failed to open cache file: %s\n", strerror(err));
@@ -2230,7 +2235,7 @@ void __dls3(size_t *sp, size_t *auxv)
 	if (is_reloc_read()) {
 		// We expect the cache to only be present on the main application
 		// so load it from there
-		cached_reloc_infos = load_relo_cache(&app, &num_relocs);
+		cached_reloc_infos = load_relo_cache(&num_relocs);
 		if (!cached_reloc_infos) {
 			error("Failed to read cached relocation infos.\n");
 			if (runtime) longjmp(*rtld_fail, 1);

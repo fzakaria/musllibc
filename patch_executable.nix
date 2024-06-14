@@ -1,10 +1,10 @@
-{ stdenv, patchelf, musl, lib }: {
+{ stdenv, patchelf, musl, lib, makeWrapper }: {
   all = { name ? lib.strings.getName executable, executable
     , command ? "--version" }:
     stdenv.mkDerivation {
       name = "patched_${name}";
 
-      buildInputs = [ patchelf musl executable ];
+      buildInputs = [ patchelf musl executable makeWrapper ];
 
       phases = "installPhase";
 
@@ -25,10 +25,11 @@
         done
         # Add the custom relocation section
         for bin in $out/bin/*; do
-            RELOC_WRITE=1 $bin ${command}
-            cp relo.bin $out/bin/$(basename $bin).relo
-            objcopy --add-section .reloc.cache=relo.bin \
-                --set-section-flags .reloc.cache=noload,readonly $bin
+            local bin_reloname=$(basename $bin)_relo.bin
+            RELOC_WRITE=$bin_reloname $bin ${command}
+            cp $bin_reloname $out/bin/$bin_reloname
+            makeWrapper $bin $out/bin/$(basename $bin)-optimized \
+                --set RELOC_READ "$out/bin/$bin_reloname"
         done
       '';
     };
@@ -38,17 +39,17 @@
     stdenv.mkDerivation {
       name = "patched_${name}";
 
-      buildInputs = [ patchelf musl executable ];
+      buildInputs = [ patchelf musl executable makeWrapper];
 
       phases = "installPhase";
 
       installPhase = ''
         mkdir -p $out/bin
         patchelf --set-interpreter ${musl}/lib/libc.so ${executable}/bin/${name} --output $out/bin/${name}
-        RELOC_WRITE=1 $out/bin/${name} ${command}
-        cp relo.bin $out/bin/${name}.relo
-        objcopy --add-section .reloc.cache=relo.bin \
-                --set-section-flags .reloc.cache=noload,readonly $out/bin/${name}
+        RELOC_WRITE=${name}_relo.bin $out/bin/${name} ${command}
+        cp ${name}_relo.bin $out/bin/${name}_relo.bin
+        makeWrapper $out/bin/${name} $out/bin/${name}-optimized \
+                --set RELOC_READ "$out/bin/${name}_relo.bin"
       '';
     };
 
