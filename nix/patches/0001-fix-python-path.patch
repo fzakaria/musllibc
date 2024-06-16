@@ -1,0 +1,11 @@
+--- a/Makefile.mpi4py	2024-06-15 20:59:56.722201723 -0700
++++ b/Makefile.mpi4py	2024-06-15 21:01:52.053637972 -0700
+@@ -32,7 +32,7 @@
+ PYNAMICDIR := $(dir $(abspath $(firstword $(MAKEFILE_LIST))))
+ 
+ $(MAIN_OBJS): $(MAIN_SOURCES)
+-	$(CC) '-DROOT_DIR=$(MAKEFILE_DIR)' -c $(CFLAGS) $(PYTHON_CFLAGS) -o $@ $<
++	$(CC) '-DROOT_DIR=@python_path@' -c $(CFLAGS) $(PYTHON_CFLAGS) -o $@ $<
+ 
+ $(BIGEXE_OBJS): $(BIGEXE_SOURCES) fooN.c 
+ 	$(CC) -DBUILD_PYNAMIC_BIGEXE -c $(CFLAGS) -o $@ $(@:.o=.c)
