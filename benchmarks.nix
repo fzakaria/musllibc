@@ -20,10 +20,9 @@ lib.recurseIntoAttrs {
   '';
 
   benchmark-pynamic = writeShellScriptBin "run-pynamic-benchmark" ''
-    echo "VLA"
     ${hyperfine}/bin/hyperfine --warmup 2 --runs 3 \
-            'RELOC_READ=1 ${examples.patched_pynamic}/bin/pynamic-mpi4py-wrapped' \
-            '${examples.patched_pynamic}/bin/pynamic-mpi4py-wrapped' --export-json benchmark.json
+            '${examples.patched_pynamic}/bin/pynamic-mpi4py-optimized' \
+            '${examples.patched_pynamic}/bin/pynamic-mpi4py' --export-json benchmark.json
   '';
 
   benchark-multiple-functions-per-shared-object =
