@@ -15,7 +15,7 @@ lib.recurseIntoAttrs {
 
   benchmark-clang = writeShellScriptBin "run-clang-benchmark" ''
     ${hyperfine}/bin/hyperfine --warmup 3 --runs 100 \
-            'RELOC_READ=1 ${examples.patched_clang}/bin/clang --help' \
+            '${examples.patched_clang}/bin/clang-optimized --help' \
             '${examples.patched_clang}/bin/clang --help' --export-json benchmark.json
   '';
 
@@ -51,8 +51,8 @@ lib.recurseIntoAttrs {
 
           ${hyperfine}/bin/hyperfine --warmup $warmup --runs $runs \
                 --export-json baseline.json $binary --shell=none --output null
-          RELOC_READ=1 ${hyperfine}/bin/hyperfine --warmup $warmup --runs $runs \
-                --export-json reloc_read.json $binary --shell=none --output null
+          ${hyperfine}/bin/hyperfine --warmup $warmup --runs $runs \
+                --export-json reloc_read.json ''${binary}-optimized --shell=none --output null
 
           baseline_mean=$(jq '.results[0].mean' baseline.json)
           reloc_read_mean=$(jq '.results[0].mean' reloc_read.json)
@@ -65,7 +65,8 @@ lib.recurseIntoAttrs {
 
       # Run benchmarks for each binary
       for binary in ${examples.patched_functions_and_libraries}/bin/benchmark_*_*; do
-          [[ $binary == *.relo ]] && continue
+          [[ $binary == *_relo.bin ]] && continue
+          [[ $binary == *-optimized ]] && continue
           run_benchmark $binary $results_file
       done
 

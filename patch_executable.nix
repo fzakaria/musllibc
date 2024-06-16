@@ -39,7 +39,7 @@
     stdenv.mkDerivation {
       name = "patched_${name}";
 
-      buildInputs = [ patchelf musl executable makeWrapper];
+      buildInputs = [ patchelf musl executable makeWrapper ];
 
       phases = "installPhase";
 

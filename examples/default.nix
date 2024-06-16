@@ -27,7 +27,11 @@ lib.recurseIntoAttrs rec {
   };
 
   patched_clang =
-    wrapCC (patchExecutable.individual { executable = llvmPackages.clang.cc; });
+    patchExecutable.individual { executable = llvmPackages.clang.cc; };
+  # compilers in Nixpkgs are not usable in Nix by themselves because
+  # they do not know how to find header files and libc
+  # wrapCC creates a wrapper file with all the necessary info included
+  patched_clang_wrapped = wrapCC patched_clang;
 
   patched_python =
     patchExecutable.individual { executable = enableDebugging python3; };
@@ -44,14 +48,12 @@ lib.recurseIntoAttrs rec {
     buildInputs =
       [ (python3.withPackages (ps: [ ps.mpi4py ])) openmpi makeWrapper ];
     propagatedBuildInputs = [ openssh ];
-    
+
     configurePhase = ''
       # do nothing
     '';
 
-    patches = [
-      ../nix/patches/0001-fix-python-path.patch
-    ];
+    patches = [ ../nix/patches/0001-fix-python-path.patch ];
 
     postPatch = ''
       substituteInPlace Makefile.mpi4py \
@@ -83,8 +85,8 @@ lib.recurseIntoAttrs rec {
 
   };
 
-  patched_pynamic = patchExecutable.individual { 
-      name = "pynamic-mpi4py";
-      executable = pynamic;
+  patched_pynamic = patchExecutable.individual {
+    name = "pynamic-mpi4py";
+    executable = pynamic;
   };
 }
