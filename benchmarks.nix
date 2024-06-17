@@ -8,9 +8,9 @@ lib.recurseIntoAttrs {
     '';
 
   benchmark-libreoffice = writeShellScriptBin "run-libreoffice-benchmark" ''
-    ${hyperfine}/bin/hyperfine --warmup 3 --runs 100 \
-            'RELOC_READ=1 ${examples.patched_libreoffice}/lib/libreoffice/program/soffice-patched.bin --help' \
-            '${examples.patched_libreoffice}/lib/libreoffice/program/soffice-patched.bin --help' --export-json benchmark.json
+    ${hyperfine}/bin/hyperfine --warmup 3 --runs 20 \
+            '${examples.patched_libreoffice}/lib/libreoffice/program/soffice.bin-optimized --help' \
+            '${examples.patched_libreoffice}/lib/libreoffice/program/soffice.bin --help' --export-json benchmark.json
   '';
 
   benchmark-clang = writeShellScriptBin "run-clang-benchmark" ''

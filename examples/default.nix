@@ -16,13 +16,15 @@ lib.recurseIntoAttrs rec {
   patched_libreoffice = symlinkJoin {
     name = "patched_libreoffice";
     paths = [ libreoffice_musl ];
-    buildInputs = [ binutils patchelf musl ];
+    buildInputs = [ binutils patchelf musl makeWrapper];
     postBuild = ''
-      patchelf --set-interpreter ${musl}/lib/libc.so $out/lib/libreoffice/program/soffice.bin --output $out/lib/libreoffice/program/soffice-patched.bin
-      RELOC_WRITE=1 $out/lib/libreoffice/program/soffice-patched.bin --help &> /dev/null
-      cp relo.bin $out/lib/libreoffice/program/soffice-patched.relo
-      objcopy --add-section .reloc.cache=relo.bin \
-              --set-section-flags .reloc.cache=noload,readonly $out/lib/libreoffice/program/soffice-patched.bin
+      patchelf --set-interpreter ${musl}/lib/libc.so $out/lib/libreoffice/program/soffice.bin --output $out/lib/libreoffice/program/soffice.bin-patched
+      mv $out/lib/libreoffice/program/soffice.bin-patched $out/lib/libreoffice/program/soffice.bin
+
+      RELOC_WRITE=soffice_relo.bin $out/lib/libreoffice/program/soffice.bin --help &> /dev/null
+      cp soffice_relo.bin $out/lib/libreoffice/program/soffice_relo.bin
+      makeWrapper $out/lib/libreoffice/program/soffice.bin $out/lib/libreoffice/program/soffice.bin-optimized \
+                --set RELOC_READ "$out/lib/libreoffice/program/soffice_relo.bin"
     '';
   };
 
