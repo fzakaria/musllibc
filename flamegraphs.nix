@@ -1,38 +1,37 @@
-{ writeShellScriptBin, flamegraph, examples, lib }:
+{ writeShellScriptBin, flamegraph, examples, lib, symlinkJoin }:
 lib.recurseIntoAttrs rec {
 
-  baseline = binary:
-    writeShellScriptBin "create-flamegraph" ''
-      perf record -F 1000 -g -a --user-callchains -- ${binary} > /dev/null
-      perf script > out.perf
-      ${flamegraph}/bin/stackcollapse-perf.pl out.perf > out.perf-folded
-      grep _dlstart_c out.perf-folded > _dlstart_c-out.perf-folded
-      ${flamegraph}/bin/flamegraph.pl --title ' ' _dlstart_c-out.perf-folded > baseline.svg
-      echo $(realpath baseline.svg)
-    '';
+  flamegraph-script = { binary, command ? "" }:
 
-  modified = binary:
-    writeShellScriptBin "create-flamegraph" ''
-      RELOC_READ=1 perf record -F 1000 -g -a --user-callchains -- ${binary} > /dev/null
-      perf script > out.perf
-      ${flamegraph}/bin/stackcollapse-perf.pl out.perf > out.perf-folded
-      grep _dlstart out.perf-folded > _dlstart-out.perf-folded
-      ${flamegraph}/bin/flamegraph.pl --title ' ' _dlstart-out.perf-folded > modified.svg
-      echo $(realpath modified.svg)
-    '';
+    let
+      script = b:
+        (let
+          svgName =
+            if lib.hasSuffix "-optimized" b then "modified" else "baseline";
+        in writeShellScriptBin "create-flamegraph-${svgName}" ''
+          perf record -F 1000 -g -a --user-callchains -- ${b} ${command} > /dev/null
+          perf script > out.perf
+          ${flamegraph}/bin/stackcollapse-perf.pl out.perf > out.perf-folded
+          grep _dlstart_c out.perf-folded > _dlstart_c-out.perf-folded
+          ${flamegraph}/bin/flamegraph.pl --title ' ' _dlstart_c-out.perf-folded > ${svgName}.svg
+          echo $(realpath ${svgName}.svg)
+        '');
+    in symlinkJoin {
+      name = "flamegraph-script";
+      paths = [ (script binary) (script (binary + "-optimized")) ];
+    };
 
-  million_functions_baseline =
-    baseline "${examples.patched_functions}/bin/1000000_functions";
-  million_functions_modified =
-    modified "${examples.patched_functions}/bin/1000000_functions";
+  million_functions = flamegraph-script {
+    binary = "${examples.patched_functions}/bin/1000000_functions";
+  };
 
-  pynamic_baseline =
-    baseline "${examples.patched_pynamic}/bin/pynamic-mpi4py-wrapped";
-  pynamic_modified =
-    modified "${examples.patched_pynamic}/bin/pynamic-mpi4py-wrapped";
+  pynamic = flamegraph-script {
+    binary = "${examples.patched_pynamic}/bin/pynamic-mpi4py";
+  };
 
-  libreoffice_baseline = baseline
-    "${examples.patched_libreoffice}/lib/libreoffice/program/soffice-patched.bin --help";
-  libreoffice_modified = modified
-    "${examples.patched_libreoffice}/lib/libreoffice/program/soffice-patched.bin --help";
+  libreoffice = flamegraph-script {
+    binary =
+      "${examples.patched_libreoffice}/lib/libreoffice/program/soffice.bin";
+    command = "--help";
+  };
 }

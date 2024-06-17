@@ -16,7 +16,7 @@ lib.recurseIntoAttrs rec {
   patched_libreoffice = symlinkJoin {
     name = "patched_libreoffice";
     paths = [ libreoffice_musl ];
-    buildInputs = [ binutils patchelf musl makeWrapper];
+    buildInputs = [ binutils patchelf musl makeWrapper ];
     postBuild = ''
       patchelf --set-interpreter ${musl}/lib/libc.so $out/lib/libreoffice/program/soffice.bin --output $out/lib/libreoffice/program/soffice.bin-patched
       mv $out/lib/libreoffice/program/soffice.bin-patched $out/lib/libreoffice/program/soffice.bin
