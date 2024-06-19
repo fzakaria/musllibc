@@ -93,6 +93,7 @@ typedef struct {
 	size_t offset; 		  	  		 // Offset of the relocation
 	size_t symbol_dso_index;		 // 0-based index starting from the head of the DSO list
 	size_t dso_index;				 // 0-based index starting from the head of the DSO list
+	char symbol_name[255];			 // Name of the symbol
 	char symbol_dso_name[255];       // Name of the DSO
 	char dso_name[255];       		 // Name of the DSO
 } CachedRelocInfo;
@@ -601,6 +602,7 @@ static void do_relocs(struct dso *dso, size_t *rel, size_t rel_size, size_t stri
 				cached_reloc_infos[*reloc_count].st_size = def.sym->st_size;
 				cached_reloc_infos[*reloc_count].dso_index = determine_dso_index(dso);
 				cached_reloc_infos[*reloc_count].symbol_dso_index = determine_dso_index(def.dso);
+				strcpy(cached_reloc_infos[*reloc_count].symbol_name, name);
 				strcpy(cached_reloc_infos[*reloc_count].dso_name, dso->name);
 				strcpy(cached_reloc_infos[*reloc_count].symbol_dso_name, def.dso->name);
 				cached_reloc_infos[*reloc_count].offset = rel[0];

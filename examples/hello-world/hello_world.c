@@ -2,6 +2,7 @@
 #include <dlfcn.h>
 
 extern void foo();
+extern void bar();
 
 extern int global_variable;
 
@@ -15,6 +16,7 @@ int main() {
     local_copy = global_variable;
     printf("Hello, World: %d!\n", local_copy);
     foo();
+    bar();
 
     Dl_info info;
 

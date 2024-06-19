@@ -14,6 +14,7 @@ class CachedRelocInfo(ctypes.Structure):
         ("offset", ctypes.c_size_t),
         ("symbol_dso_index", ctypes.c_size_t),
         ("dso_index", ctypes.c_size_t),
+        ("symbol_name", ctypes.c_char * 255),
         ("symbol_dso_name", ctypes.c_char * 255),
         ("dso_name", ctypes.c_char * 255),
     ]
@@ -29,6 +30,7 @@ CachedRelocInfoTuple = namedtuple(
         "offset",
         "symbol_dso_index",
         "dso_index",
+        "symbol_name",
         "symbol_dso_name",
         "dso_name",
     ],
@@ -50,6 +52,7 @@ def write_to_sqlite(db_path: str, binary_file_path: str) -> None:
             offset INTEGER,
             symbol_dso_index INTEGER,
             dso_index INTEGER,
+            symbol_name TEXT,
             symbol_dso_name TEXT,
             dso_name TEXT
         )
@@ -65,10 +68,10 @@ def write_to_sqlite(db_path: str, binary_file_path: str) -> None:
             """
             INSERT INTO CachedRelocInfo(type, addend, st_value, st_size,
                                         offset, symbol_dso_index, dso_index,
-                                        symbol_dso_name, dso_name)
+                                        symbol_name, symbol_dso_name, dso_name)
                        VALUES (:type, :addend, :st_value, :st_size, :offset,
-                               :symbol_dso_index, :dso_index, :symbol_dso_name,
-                               :dso_name)
+                               :symbol_dso_index, :dso_index, :symbol_name,
+                               :symbol_dso_name, :dso_name)
         """,
             record._asdict(),
         )
@@ -85,7 +88,7 @@ def read_from_sqlite(db_path):
         """
             SELECT type, addend, st_value, st_size,
                    offset, symbol_dso_index, dso_index,
-                   symbol_dso_name, dso_name
+                   symbol_name, symbol_dso_name, dso_name
             FROM CachedRelocInfo
         """
     )
@@ -102,15 +105,16 @@ def read_from_sqlite(db_path):
             offset=record[4],
             symbol_dso_index=record[5],
             dso_index=record[6],
-            symbol_dso_name=record[7],
-            dso_name=record[8],
+            symbol_name=record[7],
+            symbol_dso_name=record[8],
+            dso_name=record[9],
         )
 
     conn.close()
 
 
 def write_binary_file(file_path, records):
-    with open(file_path, "wb") as f:
+    with open(file_path, "xb") as f:
         for record in records:
             # Create an instance of CachedRelocInfo
             info = CachedRelocInfo(
@@ -121,6 +125,9 @@ def write_binary_file(file_path, records):
                 offset=record.offset,
                 symbol_dso_index=record.symbol_dso_index,
                 dso_index=record.dso_index,
+                symbol_name=record.symbol_name.encode("utf-8").ljust(
+                    255, b"\x00"
+                ),
                 symbol_dso_name=record.symbol_dso_name.encode("utf-8").ljust(
                     255, b"\x00"
                 ),
@@ -150,10 +157,24 @@ def read_binary_file(file_path):
                 "offset": record.offset,
                 "symbol_dso_index": record.symbol_dso_index,
                 "dso_index": record.dso_index,
+                "symbol_name": record.symbol_name.decode("utf-8"),
                 "symbol_dso_name": record.symbol_dso_name.decode("utf-8"),
                 "dso_name": record.dso_name.decode("utf-8"),
             }
             yield CachedRelocInfoTuple(**record_dict)
+
+
+def write_json_file(json_file_path, records):
+    with open(json_file_path, "w") as f:
+        for record in records:
+            json.dump(record._asdict(), f)
+            f.write("\n")
+
+
+def read_json_file(json_file_path):
+    with open(json_file_path, "r") as f:
+        for line in f:
+            yield CachedRelocInfoTuple(**json.loads(line.strip()))
 
 
 def print_file_contents(file_path):
@@ -181,6 +202,8 @@ def main():
         choices=[
             "file-to-sqlite",
             "sqlite-to-file",
+            "file-to-json",
+            "json-to-file",
             "print-file",
             "diff-files",
         ],
@@ -190,6 +213,7 @@ def main():
         "file", help="Path to the binary file or first file for diff"
     )
     parser.add_argument("--db", help="Path to the SQLite database file")
+    parser.add_argument("--json", help="Path to the JSON file")
     parser.add_argument("--file2", help="Path to the second file for diff")
     args = parser.parse_args()
 
@@ -201,6 +225,16 @@ def main():
         if not args.db:
             parser.error("--db is required for sqlite-to-file command")
         records = read_from_sqlite(args.db)
+        write_binary_file(args.file, records)
+    elif args.command == "file-to-json":
+        if not args.json:
+            parser.error("--json is required for file-to-json command")
+        records = read_binary_file(args.file)
+        write_json_file(args.json, records)
+    elif args.command == "json-to-file":
+        if not args.json:
+            parser.error("--json is required for json-to-file command")
+        records = read_json_file(args.json)
         write_binary_file(args.file, records)
     elif args.command == "print-file":
         print_file_contents(args.file)
