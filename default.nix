@@ -18,6 +18,7 @@ let
     patchExecutable = callPackage ./patch_executable.nix { };
     musl = callPackage ./musl.nix { };
     read_relo_cache = callPackage ./examples/read_relo_cache { };
+    sak = callPackage ./examples/swiss-army-knife/default.nix { };
     examples = rec {
       # creates binaries with variying number of functions and shared objects
       raw_functions_and_libraries =
