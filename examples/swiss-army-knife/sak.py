@@ -3,6 +3,7 @@ import argparse
 import json
 import ctypes
 from collections import namedtuple
+from elftools.elf.elffile import ELFFile
 
 
 class CachedRelocInfo(ctypes.Structure):
@@ -193,6 +194,21 @@ def diff_files(file_path1, file_path2):
     return records1 == records2
 
 
+def get_symbol_info(elf_file_path, symbol_name):
+    with open(elf_file_path, "rb") as f:
+        elffile = ELFFile(f)
+        symtab = elffile.get_section_by_name(".symtab")
+
+        if symtab:
+            for symbol in symtab.iter_symbols():
+                if symbol.name == symbol_name:
+                    return {
+                        "st_value": symbol["st_value"],
+                        "st_size": symbol["st_size"],
+                    }
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Convert binary file to SQLite database and vice versa."
@@ -206,6 +222,7 @@ def main():
             "json-to-file",
             "print-file",
             "diff-files",
+            "get-symbol-info",
         ],
         help="Command to execute",
     )
@@ -215,6 +232,9 @@ def main():
     parser.add_argument("--db", help="Path to the SQLite database file")
     parser.add_argument("--json", help="Path to the JSON file")
     parser.add_argument("--file2", help="Path to the second file for diff")
+    parser.add_argument(
+        "--symbol", help="Symbol name to search for in ELF file"
+    )
     args = parser.parse_args()
 
     if args.command == "file-to-sqlite":
@@ -245,6 +265,14 @@ def main():
             print("Files are equal")
         else:
             print("Files are different")
+    elif args.command == "get-symbol-info":
+        if not args.symbol:
+            parser.error("--symbol is required for get-symbol-info command")
+        info = get_symbol_info(args.file, args.symbol)
+        if info is not None:
+            print(json.dumps(info))
+        else:
+            print(f"Symbol {args.symbol} not found in {args.file}")
 
 
 if __name__ == "__main__":
