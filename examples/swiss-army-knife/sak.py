@@ -2,11 +2,30 @@ import sqlite3
 import argparse
 import json
 import ctypes
-from collections import namedtuple
 from elftools.elf.elffile import ELFFile
+from typing import Iterable, Optional, Tuple
+from dataclasses import dataclass, asdict
+import os
+import sys
 
 
-class CachedRelocInfo(ctypes.Structure):
+@dataclass
+class CachedRelocInfo:
+    type: int
+    addend: int
+    st_value: int
+    st_size: int
+    offset: int
+    symbol_dso_index: int
+    dso_index: int
+    symbol_name: str
+    symbol_dso_name: str
+    dso_name: str
+
+
+class CachedRelocInfoStruct(ctypes.Structure):
+    """A ctypes structure representing cached relocation info."""
+
     _fields_ = [
         ("type", ctypes.c_int),
         ("addend", ctypes.c_size_t),
@@ -20,25 +39,42 @@ class CachedRelocInfo(ctypes.Structure):
         ("dso_name", ctypes.c_char * 255),
     ]
 
+    @classmethod
+    def from_dataclass(
+        cls, record: CachedRelocInfo
+    ) -> "CachedRelocInfoStruct":
+        return cls(
+            type=record.type,
+            addend=record.addend,
+            st_value=record.st_value,
+            st_size=record.st_size,
+            offset=record.offset,
+            symbol_dso_index=record.symbol_dso_index,
+            dso_index=record.dso_index,
+            symbol_name=record.symbol_name.encode("utf-8").ljust(255, b"\x00"),
+            symbol_dso_name=record.symbol_dso_name.encode("utf-8").ljust(
+                255, b"\x00"
+            ),
+            dso_name=record.dso_name.encode("utf-8").ljust(255, b"\x00"),
+        )
 
-CachedRelocInfoTuple = namedtuple(
-    "CachedRelocInfoTuple",
-    [
-        "type",
-        "addend",
-        "st_value",
-        "st_size",
-        "offset",
-        "symbol_dso_index",
-        "dso_index",
-        "symbol_name",
-        "symbol_dso_name",
-        "dso_name",
-    ],
-)
+
+@dataclass
+class SymbolInfo:
+    """A dataclass representing the st_value and st_size of a symbol."""
+
+    st_value: int
+    st_size: int
 
 
 def write_to_sqlite(db_path: str, binary_file_path: str) -> None:
+    """
+    Write binary data to a SQLite database.
+
+    Args:
+        db_path: The path to the SQLite database.
+        binary_file_path: The path to the binary file.
+    """
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
@@ -74,15 +110,25 @@ def write_to_sqlite(db_path: str, binary_file_path: str) -> None:
                                :symbol_dso_index, :dso_index, :symbol_name,
                                :symbol_dso_name, :dso_name)
         """,
-            record._asdict(),
+            asdict(record),
         )
 
     conn.commit()
     conn.close()
 
 
-def read_from_sqlite(db_path):
+def read_from_sqlite(db_path: str) -> Iterable[CachedRelocInfo]:
+    """
+    Read data from a SQLite database and yield it as CachedRelocInfoTuple.
+
+    Args:
+        db_path: The path to the SQLite database.
+
+    Yields:
+        CachedRelocInfoTuple: The next record from the SQLite database.
+    """
     conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
     cursor.execute(
@@ -98,47 +144,38 @@ def read_from_sqlite(db_path):
         record = cursor.fetchone()
         if record is None:
             break
-        yield CachedRelocInfoTuple(
-            type=record[0],
-            addend=record[1],
-            st_value=record[2],
-            st_size=record[3],
-            offset=record[4],
-            symbol_dso_index=record[5],
-            dso_index=record[6],
-            symbol_name=record[7],
-            symbol_dso_name=record[8],
-            dso_name=record[9],
-        )
+        yield CachedRelocInfo(**record)
 
     conn.close()
 
 
-def write_binary_file(file_path, records):
+def write_binary_file(
+    file_path: str, records: Iterable[CachedRelocInfo]
+) -> None:
+    """
+    Write records to a binary file.
+
+    Args:
+        file_path: The path to the binary file.
+        records: The records to write.
+    """
     with open(file_path, "xb") as f:
         for record in records:
-            # Create an instance of CachedRelocInfo
-            info = CachedRelocInfo(
-                type=record.type,
-                addend=record.addend,
-                st_value=record.st_value,
-                st_size=record.st_size,
-                offset=record.offset,
-                symbol_dso_index=record.symbol_dso_index,
-                dso_index=record.dso_index,
-                symbol_name=record.symbol_name.encode("utf-8").ljust(
-                    255, b"\x00"
-                ),
-                symbol_dso_name=record.symbol_dso_name.encode("utf-8").ljust(
-                    255, b"\x00"
-                ),
-                dso_name=record.dso_name.encode("utf-8").ljust(255, b"\x00"),
-            )
+            info = CachedRelocInfoStruct.from_dataclass(record)
             f.write(bytearray(info))
 
 
-def read_binary_file(file_path):
-    struct_size = ctypes.sizeof(CachedRelocInfo)
+def read_binary_file(file_path: str) -> Iterable[CachedRelocInfo]:
+    """
+    Read records from a binary file and yield them as CachedRelocInfo.
+
+    Args:
+        file_path: The path to the binary file.
+
+    Yields:
+        CachedRelocInfoTuple: The next record from the binary file.
+    """
+    struct_size = ctypes.sizeof(CachedRelocInfoStruct)
     with open(file_path, "rb") as f:
         while True:
             data = f.read(struct_size)
@@ -148,7 +185,7 @@ def read_binary_file(file_path):
                 raise ValueError(
                     f"Expected {struct_size} bytes, got {len(data)} bytes"
                 )
-            record = CachedRelocInfo.from_buffer_copy(data)
+            record = CachedRelocInfoStruct.from_buffer_copy(data)
             # Convert record to dictionary
             record_dict = {
                 "type": record.type,
@@ -162,30 +199,65 @@ def read_binary_file(file_path):
                 "symbol_dso_name": record.symbol_dso_name.decode("utf-8"),
                 "dso_name": record.dso_name.decode("utf-8"),
             }
-            yield CachedRelocInfoTuple(**record_dict)
+            yield CachedRelocInfo(**record_dict)
 
 
-def write_json_file(json_file_path, records):
+def write_json_file(
+    json_file_path: str, records: Iterable[CachedRelocInfo]
+) -> None:
+    """
+    Write records to a JSON file.
+
+    Args:
+        json_file_path: The path to the JSON file.
+        records: The records to write.
+    """
     with open(json_file_path, "w") as f:
         for record in records:
-            json.dump(record._asdict(), f)
+            json.dump(asdict(record), f)
             f.write("\n")
 
 
-def read_json_file(json_file_path):
+def read_json_file(json_file_path: str) -> Iterable[CachedRelocInfo]:
+    """
+    Read records from a JSON file and yield them as CachedRelocInfo.
+
+    Args:
+        json_file_path: The path to the JSON file.
+
+    Yields:
+        CachedRelocInfo: The next record from the JSON file.
+    """
     with open(json_file_path, "r") as f:
         for line in f:
-            yield CachedRelocInfoTuple(**json.loads(line.strip()))
+            yield CachedRelocInfo(**json.loads(line.strip()))
 
 
-def print_file_contents(file_path):
+def print_file_contents(file_path: str) -> None:
+    """
+    Print the contents of a binary file.
+
+    Args:
+        file_path: The path to the binary file.
+    """
     for record in read_binary_file(file_path):
-        print(json.dumps(record._asdict()))
+        print(json.dumps(asdict(record)))
 
 
-def diff_files(file_path1, file_path2):
+def diff_files(file_path1: str, file_path2: str) -> bool:
+    """
+    Compare two binary files for equality.
+
+    Args:
+        file_path1: The path to the first binary file.
+        file_path2 : The path to the second binary file.
+
+    Returns:
+        True if the files are equal, False otherwise.
+    """
+
     # We want a *very* stable sort
-    def key(record):
+    def key(record: CachedRelocInfo) -> Tuple[int, int]:
         return (record.dso_index, record.offset)
 
     records1 = sorted(read_binary_file(file_path1), key=key)
@@ -194,7 +266,20 @@ def diff_files(file_path1, file_path2):
     return records1 == records2
 
 
-def get_symbol_info(elf_file_path, symbol_name):
+def get_symbol_info(
+    elf_file_path: str, symbol_name: str
+) -> Optional[SymbolInfo]:
+    """
+    Get the st_value and st_size of a symbol in an ELF file.
+
+    Args:
+        elf_file_path: The path to the ELF file.
+        symbol_name: The name of the symbol to search for.
+
+    Returns:
+        A dictionary containing the st_value and st_size of the symbol,
+        or None if the symbol was not found.
+    """
     with open(elf_file_path, "rb") as f:
         elffile = ELFFile(f)
         symtab = elffile.get_section_by_name(".symtab")
@@ -202,11 +287,52 @@ def get_symbol_info(elf_file_path, symbol_name):
         if symtab:
             for symbol in symtab.iter_symbols():
                 if symbol.name == symbol_name:
-                    return {
-                        "st_value": symbol["st_value"],
-                        "st_size": symbol["st_size"],
-                    }
+                    return SymbolInfo(
+                        st_value=symbol["st_value"],
+                        st_size=symbol["st_size"],
+                    )
     return None
+
+
+def get_override_records(
+    file_path: str, elf_file_path: str, symbol_name: str
+) -> Iterable[CachedRelocInfo]:
+    """
+    Finds all records in the relocation cache file that match
+    the given symbol name, and replaces it with the st_value and
+    st_size of the symbol found in elf_file_path.
+
+    Additionally, it sets the symbol_dso_index to -1 and sets
+    the symbol_dso_name to the elf_file_path.
+
+    Args:
+        file_path: The path to the relocation cache file.
+        elf_file_path: The path to the ELF file.
+        symbol_name: The name of the symbol to search for.
+
+    Returns:
+    """
+    symbol_info = get_symbol_info(elf_file_path, symbol_name)
+
+    for record in read_binary_file(file_path):
+        if record.symbol_name != symbol_name:
+            continue
+
+        record.symbol_dso_index = -1
+        record.st_size = symbol_info.st_size
+        record.st_value = symbol_info.st_value
+        record.symbol_dso_name = os.path.realpath(elf_file_path)
+
+        yield record
+
+
+def inject_records(file_path: str) -> None:
+    with open(file_path, "ab") as f:
+        f.seek(0, os.SEEK_END)
+        for line in sys.stdin:
+            record = CachedRelocInfo(**json.loads(line.strip()))
+            struct_record = CachedRelocInfoStruct.from_dataclass(record)
+            f.write(bytearray(struct_record))
 
 
 def main():
@@ -223,6 +349,8 @@ def main():
             "print-file",
             "diff-files",
             "get-symbol-info",
+            "get-override-records",
+            "inject-records",
         ],
         help="Command to execute",
     )
@@ -273,7 +401,33 @@ def main():
             print(json.dumps(info))
         else:
             print(f"Symbol {args.symbol} not found in {args.file}")
+    elif args.command == "get-override-records":
+        if not args.symbol:
+            parser.error(
+                "--symbol is required for get-override-records command"
+            )
+        if not args.file2:
+            parser.error(
+                "--file2 is required for get-override-records command"
+            )
+        records = get_override_records(args.file, args.file2, args.symbol)
+        for record in records:
+            print(json.dumps(asdict(record)))
+    elif args.command == "inject-records":
+        # This is the 1-line workflow to select some records
+        # and override it.
+        #
+        # ./result/bin/sak get-override-records \
+        #           ./result-1/bin/hello_world_relo.bin \
+        #               --symbol puts --file2 ./libputs.so  | \
+        #           fzf -m  --preview 'echo {}' \
+        #               --preview-window down:5:wrap | \
+        #           ./result/bin/sak inject-records ./hello_world_relo.bin
+        inject_records(args.file)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BrokenPipeError:
+        exit(0)
