@@ -11,4 +11,5 @@ build/
 .vscode/
 *.bin
 result
+result-*
 __pycache__/
