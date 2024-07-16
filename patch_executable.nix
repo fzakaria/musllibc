@@ -39,6 +39,8 @@
     stdenv.mkDerivation {
       name = "patched_${name}";
 
+      preferLocalBuild = true;
+
       buildInputs = [ patchelf musl executable makeWrapper ];
 
       phases = "installPhase";
