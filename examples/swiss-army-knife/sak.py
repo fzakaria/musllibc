@@ -416,6 +416,7 @@ def main():
     elif args.command == "inject-records":
         # This is the 1-line workflow to select some records
         # and override it.
+        # TODO(fzakaria): Make a command to do this all
         #
         # ./result/bin/sak get-override-records \
         #           ./result-1/bin/hello_world_relo.bin \
