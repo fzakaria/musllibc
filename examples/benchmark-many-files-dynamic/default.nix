@@ -28,8 +28,16 @@ in stdenv.mkDerivation {
         popd
     }
 
+    # set a maximum number of functions and shared objects
+    # larger than this seems to cause building to take too long
+    max_functions=1000000
+
     for num_functions in 1 10 100 1000; do
       for num_shared_objects in 1 10 100 1000; do
+          total_functions=$((num_functions * num_shared_objects))
+          if [[ $total_functions -gt $max_functions ]]; then
+            continue
+          fi
           generate_files $num_functions $num_shared_objects
       done
     done
