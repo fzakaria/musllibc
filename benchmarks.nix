@@ -27,7 +27,7 @@ lib.recurseIntoAttrs {
 
   benchark-raw-multiple-functions-per-shared-object =
     writeShellScriptBin "run-raw-multiple-functions-per-shared-object-benchmark" ''
-      ${hyperfine}/bin/hyperfine ${examples.patched_functions_and_libraries}/bin/* \
+      ${hyperfine}/bin/hyperfine ${examples.raw_functions_and_libraries}/bin/* \
         --export-json raw_benchmark.json --shell=none --output null \
         --warmup 3 --runs 5
     '';
