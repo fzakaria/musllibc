@@ -48,5 +48,6 @@
 in
   symlinkJoin {
     name = "raw_functions_and_libraries";
-    paths = [binaries];
+    # only join the bin directory
+    paths = builtins.map(binary: "${binary}/bin") binaries;
   }
