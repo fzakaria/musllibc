@@ -8,7 +8,7 @@ lib.recurseIntoAttrs {
     '';
 
   benchmark-libreoffice = writeShellScriptBin "run-libreoffice-benchmark" ''
-    ${hyperfine}/bin/hyperfine --warmup 3 --runs 20b \
+    ${hyperfine}/bin/hyperfine --warmup 3 --runs 20 \
             '${examples.patched_libreoffice}/lib/libreoffice/program/soffice.bin-optimized --help' \
             '${examples.patched_libreoffice}/lib/libreoffice/program/soffice.bin --help' --export-json benchmark.json
   '';
@@ -29,7 +29,7 @@ lib.recurseIntoAttrs {
     writeShellScriptBin "run-raw-multiple-functions-per-shared-object-benchmark" ''
       ${hyperfine}/bin/hyperfine ${examples.raw_functions_and_libraries}/bin/* \
         --export-json raw_benchmark.json --shell=none --output null \
-        --warmup 3 --runs 5
+        --warmup 0 --runs 1
     '';
 
   benchark-multiple-functions-per-shared-object =
