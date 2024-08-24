@@ -67,7 +67,7 @@ class SymbolInfo:
     st_size: int
 
 
-def write_to_sqlite(db_path: str, binary_file_path: str) -> None:
+def write_to_sqlite(conn: sqlite3.Connection, binary_file_path: str) -> None:
     """
     Write binary data to a SQLite database.
 
@@ -75,7 +75,7 @@ def write_to_sqlite(db_path: str, binary_file_path: str) -> None:
         db_path: The path to the SQLite database.
         binary_file_path: The path to the binary file.
     """
-    conn = sqlite3.connect(db_path)
+
     cursor = conn.cursor()
 
     cursor.execute(
@@ -114,7 +114,6 @@ def write_to_sqlite(db_path: str, binary_file_path: str) -> None:
         )
 
     conn.commit()
-    conn.close()
 
 
 def read_from_sqlite(db_path: str) -> Iterable[CachedRelocInfo]:
@@ -350,6 +349,7 @@ def main():
             "diff-files",
             "get-symbol-info",
             "get-override-records",
+            "has-necessary-symbols",
             "inject-records",
         ],
         help="Command to execute",
@@ -363,12 +363,17 @@ def main():
     parser.add_argument(
         "--symbol", help="Symbol name to search for in ELF file"
     )
+    parser.add_argument(
+        "--symbol-dso-name", help="DSO name that has symbols to check against"
+    )
     args = parser.parse_args()
 
     if args.command == "file-to-sqlite":
         if not args.db:
             parser.error("--db is required for file-to-sqlite command")
-        write_to_sqlite(args.db, args.file)
+        conn = sqlite3.connect(args.db)
+        write_to_sqlite(conn, args.file)
+        conn.close()
     elif args.command == "sqlite-to-file":
         if not args.db:
             parser.error("--db is required for sqlite-to-file command")
@@ -413,6 +418,61 @@ def main():
         records = get_override_records(args.file, args.file2, args.symbol)
         for record in records:
             print(json.dumps(asdict(record)))
+    elif args.command == "has-necessary-symbols":
+        if not args.file2:
+            parser.error(
+                "file2 is required for has-necessary-symbols command"
+            )
+        if not args.symbol_dso_name:
+            parser.error(
+                "--symbol-dso-name is required"
+            )
+        conn = sqlite3.connect(":memory:")
+        write_to_sqlite(conn, args.file)
+        # Create the ELF file (file2) SQLite table
+        cursor = conn.cursor()
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ELFSymbols (
+            id INTEGER PRIMARY KEY,
+            symbol_name TEXT,
+            dso_name TEXT
+        )
+        """)
+        with open(args.file2, 'rb') as f:
+            elffile = ELFFile(f)
+            symtab = elffile.get_section_by_name('.dynsym')
+
+            if not symtab:
+                print("No dynamic symbol table found in ELF file.")
+                return
+
+            conn.execute("BEGIN TRANSACTION")
+            for symbol in symtab.iter_symbols():
+                cursor.execute("""
+                INSERT INTO ELFSymbols (symbol_name)
+                VALUES (:name)
+                """, {"name": symbol.name})
+        conn.commit()
+
+        cursor.execute("""
+            SELECT cri.symbol_name
+            FROM CachedRelocInfo cri
+            LEFT JOIN ELFSymbols es
+            ON cri.symbol_name = es.symbol_name
+            WHERE es.symbol_name IS NULL AND
+                  cri.symbol_dso_name = :dso_name;
+            """, {"dso_name": args.symbol_dso_name})
+
+        missing_symbols = cursor.fetchall()
+        if not missing_symbols:
+            print("All necessary symbols are present.")
+            return True
+        else:
+            print("The following symbols are missing:")
+            for symbol in missing_symbols:
+                print(symbol[0])
+
+        conn.close()
     elif args.command == "inject-records":
         # This is the 1-line workflow to select some records
         # and override it.

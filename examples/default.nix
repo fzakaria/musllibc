@@ -1,4 +1,4 @@
-{ openssh, musl, patchelf, libffi, ruby, patchExecutable, wrapCC, llvmPackages
+{ openssh, musl, patchelf, libffi, coreutils, ruby, patchExecutable, wrapCC, llvmPackages
 , enableDebugging, python3, stdenv, fetchFromGitHub, openmpi, makeWrapper, lib
 , libreoffice, libreoffice-unwrapped, symlinkJoin, binutils }:
 lib.recurseIntoAttrs rec {
@@ -10,6 +10,8 @@ lib.recurseIntoAttrs rec {
     });
     modified_ruby = enableDebugging (ruby.override { libffi = libffi; });
   in patchExecutable.individual { executable = modified_ruby; };
+
+  patched_ls = patchExecutable.individual { name = "ls"; executable = coreutils; };
 
   libreoffice_musl = libreoffice-unwrapped;
 
