@@ -18,7 +18,7 @@
             fi
 
             # Check if the file is an ELF binary
-            if ! file "$bin" | grep -q "ELF"; then
+            if ! file -L "$bin" | grep -q "ELF"; then
                 continue
             fi
             patchelf --set-interpreter ${musl}/lib/libc.so $bin --output $out/bin/$(basename $bin)
