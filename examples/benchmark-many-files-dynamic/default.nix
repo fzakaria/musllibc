@@ -10,11 +10,10 @@
   num_shared_objects = [1 10 100 1000 10000]; #100000 1000000];
   combinations =
     builtins.filter (combination: (combination.functions * combination.shared_objects) <= 1000000)
-    (lib.crossLists (functions: shared_objects:
-      {
-        functions = functions;
-        shared_objects = shared_objects;
-      })[num_functions num_shared_objects]);
+    (lib.crossLists (functions: shared_objects: {
+      functions = functions;
+      shared_objects = shared_objects;
+    }) [num_functions num_shared_objects]);
   buildBinary = combination: let
     functions = toString combination.functions;
     shared_objects = toString combination.shared_objects;
@@ -49,5 +48,9 @@ in
   symlinkJoin {
     name = "raw_functions_and_libraries";
     # only join the bin directory
-    paths = builtins.map(binary: "${binary}/bin") binaries;
+    paths = builtins.map (binary: "${binary}/bin") binaries;
+    postBuild = ''
+      mkdir $out/bin
+      mv $out/benchmark_* $out/bin
+    '';
   }
