@@ -7,7 +7,7 @@
   fs = lib.fileset;
   # Define the possible values for total_functions and num_shared_objects
   num_functions = [1 10 100 1000 10000 100000 1000000];
-  num_shared_objects = [1 10 100 1000 10000 100000 1000000];
+  num_shared_objects = [1 10 100 1000 10000]; #100000 1000000];
   combinations =
     builtins.filter (combination: (combination.functions * combination.shared_objects) <= 1000000)
     (lib.crossLists (functions: shared_objects:
