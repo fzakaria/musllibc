@@ -52,15 +52,8 @@ plot = (
         y="Time (s)",
         color="Shared Objects"
     )
-    + p9.theme(  # new
-        axis_line=p9.element_line(size=1),
-        axis_line_x=p9.element_line(color="black"),
-        axis_line_y=p9.element_line(color="black"),
-        panel_background=p9.element_rect(fill="white"),
-        legend_box_background=p9.element_rect(fill="white"),
-        legend_key=p9.element_rect(fill='white', color='white')
-    )
+    + p9.theme_light()
 )
 
 # Display the plot
-plot.save("unpatched_histogram.png", width=10, height=10, dpi=300)
+plot.save("unpatched_histogram.png", width=8, height=8, dpi=300)
