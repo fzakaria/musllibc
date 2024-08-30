@@ -30,8 +30,10 @@ lib.recurseIntoAttrs rec {
     '';
   };
 
+  raw_clang = llvmPackages.clang;
+
   patched_clang =
-    patchExecutable.individual { executable = llvmPackages.clang.cc; };
+    patchExecutable.individual { executable = llvmPackages.clang.cc; } // { isClang = true; };
   # compilers in Nixpkgs are not usable in Nix by themselves because
   # they do not know how to find header files and libc
   # wrapCC creates a wrapper file with all the necessary info included
