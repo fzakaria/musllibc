@@ -1,0 +1,10 @@
+#! /usr/bin/env fish
+for file in /home-nonfs/fmzakari/code/github.com/ruby-bench/ruby-bench-suite/ruby/benchmark/*;
+    benchmark-driver $file --repeat-count 10 --repeat-result average \
+                     -e "withplt::/nix/store/2zlv5d02p51lk476cwjckvnadrw9l5jw-ruby-3.1.5/bin/ruby; noplt::/nix/store/kcjvbcs5d2cqp4q0afh3z4h1cbj88y84-ruby-3.1.5/bin/ruby" \
+                     --timeout 20 --runner time --output record && ruby benchmark_yaml_to_csv.rb benchmark_driver.record.yml;
+    # this should just output immediately the recorded values
+    benchmark-driver benchmark_driver.record.yml --repeat-count 10 --repeat-result average -o compare \
+                     -e "withplt::/nix/store/2zlv5d02p51lk476cwjckvnadrw9l5jw-ruby-3.1.5/bin/ruby; noplt::/nix/store/kcjvbcs5d2cqp4q0afh3z4h1cbj88y84-ruby-3.1.5/bin/ruby" \
+                     --timeout 20 --runner time --output compare
+end
