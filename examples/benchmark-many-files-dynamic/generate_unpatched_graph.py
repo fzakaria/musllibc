@@ -40,11 +40,10 @@ df = pd.DataFrame(data, columns=['total_functions', 'num_shared_objects', 'time'
 # Create the plot
 plot = (
     ggplot(df, aes(x='total_functions', y='time', color='factor(num_shared_objects)'))
-    + geom_line()
+    + geom_line(size=1.5)
     + scale_y_log10()
     + scale_x_log10(
         breaks=[1, 10, 100, 1000, 10000, 100000, 1000000],  # Logarithmic scale breaks
-        labels=['1', '10', '100', '1,000', '10,000', '100,000', '1,000,000']  # Formatted labels
     )
     + labs(
         title="",
@@ -53,7 +52,17 @@ plot = (
         color="Shared Objects"
     )
     + p9.theme_light()
+    + p9.theme(
+        text=p9.element_text(size=12),  # Set default text size
+        axis_text=p9.element_text(size=10),  # Axis tick labels
+        axis_title=p9.element_text(size=12),  # Axis titles
+        legend_title=p9.element_text(size=10),  # Legend title
+        legend_text=p9.element_text(size=10),  # Legend items
+        legend_position='inside',  # Move the legend inside
+        legend_position_inside=(0.1, 0.85), # Move legend position top left
+        legend_background=p9.element_rect(fill=(0.1, 0.2, 0.0, 0.0), color='black', size=0.0), # Set legend background transparent
+    )
 )
 
 # Display the plot
-plot.save("unpatched_histogram.png", width=8, height=8, dpi=300)
+plot.save("unpatched_histogram.png", width=5, height=5, dpi=600)
