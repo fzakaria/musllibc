@@ -1,86 +1,130 @@
 import pandas as pd
-from plotnine import *
 import numpy as np
-from io import StringIO
-import matplotlib.pyplot as plt
+from plotnine import *
+from scipy.stats import t, gmean
 
-df = pd.read_csv("./benhmark.csv")
+# Read the CSV files
+df_withplt = pd.read_csv("withplt.csv")
+df_noplt = pd.read_csv("noplt.csv")
 
-# Calculate speedup
-df['Speedup'] = df['Base'] / df['Changed']
+# Merge dataframes on 'Benchmark'
+df = pd.merge(df_withplt, df_noplt, on='Benchmark', suffixes=('_withplt', '_noplt'))
+
+# Calculate speedup (Without PLT / With PLT)
+df['Speedup'] = df['mean_withplt'] / df['mean_noplt']
 
 # Convert times to milliseconds
-df['Base_ms'] = df['Base'] * 1000
-df['Changed_ms'] = df['Changed'] * 1000
+df['Base_ms'] = df['mean_withplt'] * 1000
+df['Changed_ms'] = df['mean_noplt'] * 1000
 
-# Filter benchmarks with execution times > 10ms
+# Filter benchmarks with execution times > 5 ms (optional)
 df = df[(df['Base_ms'] > 5) | (df['Changed_ms'] > 5)].copy()
 
-# Define significance thresholds
-significant_speedup_threshold = 1.02  # Adjust as needed
-significant_slowdown_threshold = 0.98  # Adjust as needed
+# Convert standard deviations to milliseconds
+df['Base_SD_ms'] = df['stdev_withplt'] * 1000
+df['Changed_SD_ms'] = df['stdev_noplt'] * 1000
 
-# Determine significance
-def significance_category(row):
-    if row['Speedup'] >= significant_speedup_threshold:
+# Compute standard errors
+df['Base_SE_ms'] = df['Base_SD_ms'] / np.sqrt(df['n_withplt'])
+df['Changed_SE_ms'] = df['Changed_SD_ms'] / np.sqrt(df['n_noplt'])
+
+# Compute standard error of the speedup using the delta method
+df['Speedup_SE'] = np.sqrt(
+    (df['Changed_SE_ms'] / df['Base_ms']) ** 2 +
+    (df['Changed_ms'] * df['Base_SE_ms'] / df['Base_ms'] ** 2) ** 2
+)
+
+# Calculate Normalized Speedup as percentage change
+df['Normalized_Speedup'] = (df['Speedup'] - 1) * 100  # In percentage
+
+# Compute standard error of Normalized Speedup
+df['Normalized_Speedup_SE'] = df['Speedup_SE'] * 100  # Since we multiplied by 100
+
+# Compute 95% confidence intervals for Normalized Speedup
+z_score = 1.96  # For 95% confidence
+
+df['NS_CI_Lower'] = df['Normalized_Speedup'] - z_score * df['Normalized_Speedup_SE']
+df['NS_CI_Upper'] = df['Normalized_Speedup'] + z_score * df['Normalized_Speedup_SE']
+
+# Determine significance based on confidence intervals
+def significance(row):
+    if row['NS_CI_Lower'] > 0:
         return 'Significant Speedup'
-    elif row['Speedup'] <= significant_slowdown_threshold:
+    elif row['NS_CI_Upper'] < 0:
         return 'Significant Slowdown'
     else:
         return 'Not Significant'
 
-df['Significance'] = df.apply(significance_category, axis=1)
+df['Significance'] = df.apply(significance, axis=1)
 
-# Filter out non-significant data
-df_significant = df[df['Significance'] != 'Not Significant'].copy()
 
-# Reshape data for plotting
-df_long = pd.melt(df_significant, id_vars=['Benchmark', 'Speedup', 'Significance'], value_vars=['Base_ms', 'Changed_ms'],
-                  var_name='Version', value_name='Time_ms')
+# Filter significant benchmarks
+df_significant = df[df['Significance'] != 'Not Significant']
 
-# Clean up 'Version' column
-df_long['Version'] = df_long['Version'].str.replace('_ms', '')
+# Extract speedup values
+speedups = df_significant['Speedup'].values
+
+print(speedups)
+
+# Calculate the geometric mean of the speedups
+geometric_mean_speedup = gmean(speedups)
+
+# Convert to normalized speedup percentage
+normalized_geometric_mean_speedup = (geometric_mean_speedup - 1) * 100  # In percentage
+
+# Prepare data for plotting
+df_plot = df[['Benchmark', 'Normalized_Speedup', 'NS_CI_Lower', 'NS_CI_Upper', 'Significance']].copy()
 
 # Ensure the order of benchmarks is consistent
-df_significant['Benchmark'] = pd.Categorical(df_significant['Benchmark'], categories=df_significant['Benchmark'], ordered=True)
-df_long['Benchmark'] = pd.Categorical(df_long['Benchmark'], categories=df_significant['Benchmark'], ordered=True)
+df_plot['Benchmark'] = pd.Categorical(df_plot['Benchmark'], categories=df_plot['Benchmark'], ordered=True)
+
+# Map colors based on Significance
+color_mapping = {
+    'Significant Speedup': 'green',
+    'Significant Slowdown': 'red',
+    'Not Significant': 'grey'
+}
+
+# Calculate the minimum y-axis value to include at least -5%
+min_value = df_plot['NS_CI_Lower'].min()
+y_axis_min = min(-5, np.floor(min_value / 5) * 5)  # Round down to the nearest multiple of 5%
 
 # Create the plot
 p = (
-    ggplot(df_long, aes(x='Benchmark', y='Time_ms', fill='Version')) +
-    geom_bar(stat='identity', position=position_dodge(width=0.8)) +
-    geom_text(
-        df_long[df_long['Version'] == 'Base'],
-        aes(x='Benchmark', y='Time_ms + 5', label='round(Speedup, 2)', color='Significance'),
-        position=position_dodge(width=0.8),
-        ha='center',
-        va='bottom',
-        size=14,
-        format_string='{:.2f}'
+    ggplot(df_plot, aes(x='Benchmark', y='Normalized_Speedup', fill='Significance')) +
+    geom_bar(stat='identity', show_legend=False) +
+    geom_errorbar(
+        aes(ymin='NS_CI_Lower', ymax='NS_CI_Upper'),
+        width=0.2
     ) +
-    scale_y_log10() +
-    scale_fill_manual(labels = ['With PLT', 'Without PLT'], values=['#1f77b4', '#ff7f0e']) +
-    scale_color_manual(values={'Significant Speedup': 'green', 'Significant Slowdown': 'red'}) +
+    geom_hline(yintercept=0, linetype='dashed', color='black') +
+    # Add horizontal line at the geometric mean speedup
+    geom_hline(yintercept=normalized_geometric_mean_speedup, linetype='dotted', color='blue') +
+    scale_fill_manual(values=color_mapping) +
+    scale_y_continuous(
+        limits=(y_axis_min, None),  # Set the lower y-axis limit
+        breaks=np.unique(np.concatenate([np.arange(-6, 6, 1), np.arange(y_axis_min, df_plot['NS_CI_Upper'].max() + 1, 5)])),
+        labels=lambda l: ["{0:.0f}%".format(v) for v in l]
+    ) +
+    scale_fill_manual(values=color_mapping) +
     theme_bw() +
     theme(
-        axis_text_x=element_text(rotation=90, hjust=1, size=14),
+        axis_text_x=element_text(rotation=90, hjust=1, size=10),
         figure_size=(16, 10),
-        axis_text_y=element_text(size=14),  # Increased y-axis text size
-        axis_title_x=element_text(size=16),  # Increased x-axis title size
-        axis_title_y=element_text(size=16),  # Increased y-axis title size
-        legend_title=element_text(size=16),  # Increased legend title size
-        legend_text=element_text(size=14),  # Increased legend text size
-        plot_title=element_text(size=18),   # Increased plot title size
-        legend_position='top'
+        axis_text_y=element_text(size=12),
+        axis_title_x=element_text(size=14),
+        axis_title_y=element_text(size=14),
+        legend_title=element_text(size=12),
+        legend_text=element_text(size=10),
+        plot_title=element_text(size=16)
     ) +
     labs(
-        #title='Benchmark Execution Time Comparison (Significant Changes Only)',
+        # title='Normalized Speedup of Benchmarks (With 95% Confidence Intervals)',
         x='Benchmark',
-        y='Execution Time (ms)',
-        fill='Version',
-        color='Significance'
+        y='Normalized Speedup (%)',
+        fill='Significance'
     )
 )
 
-# Display the plot
-p.save("python-plt.png", width=16, height=16, dpi=300)
+# Save the plot
+p.save("normalized_speedup_bar_chart.png", width=16, height=10, dpi=300)
