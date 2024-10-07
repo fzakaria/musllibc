@@ -52,6 +52,14 @@ lib.recurseIntoAttrs {
             '${examples.patched_pynamic}/bin/pynamic-mpi4py' --export-json benchmark.json
   '';
 
+  benchmark-pynamic-donothing = writeShellScriptBin "run-pynamic-benchmark" ''
+    ${hyperfine}/bin/hyperfine --warmup 2 --runs 3 \
+            '${examples.patched_donothing_pynamic}/bin/pynamic-mpi4py-donothing-optimized' \
+            '${examples.patched_donothing_pynamic}/bin/pynamic-mpi4py-donothing' \
+            --output null \
+            --export-json benchmark.json
+  '';
+
   benchark-raw-multiple-functions-per-shared-object =
     writeShellScriptBin "run-raw-multiple-functions-per-shared-object-benchmark" ''
       ${hyperfine}/bin/hyperfine ${examples.raw_functions_and_libraries}/bin/* \
