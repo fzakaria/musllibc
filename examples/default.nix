@@ -1,6 +1,25 @@
-{ openssh, musl, patchelf, libffi, coreutils, ruby, patchExecutable, wrapCC, llvmPackages
-, enableDebugging, python3, stdenv, fetchFromGitHub, openmpi, makeWrapper, lib
-, libreoffice, libreoffice-unwrapped, symlinkJoin, binutils }:
+{
+  openssh,
+  musl,
+  patchelf,
+  libffi,
+  coreutils,
+  ruby,
+  patchExecutable,
+  wrapCC,
+  llvmPackages,
+  enableDebugging,
+  python3,
+  stdenv,
+  fetchFromGitHub,
+  openmpi,
+  makeWrapper,
+  lib,
+  libreoffice,
+  libreoffice-unwrapped,
+  symlinkJoin,
+  binutils,
+}:
 lib.recurseIntoAttrs rec {
   patched_ruby = let
     # for some reason on pkgMusl this is hanging?...
@@ -8,17 +27,21 @@ lib.recurseIntoAttrs rec {
     modified_libffi = libffi.overrideAttrs (oldAttrs: {
       doCheck = false; # Disable the check phase
     });
-    modified_ruby = enableDebugging (ruby.override { libffi = libffi; });
-  in patchExecutable.individual { executable = modified_ruby; };
+    modified_ruby = enableDebugging (ruby.override {libffi = libffi;});
+  in
+    patchExecutable.individual {executable = modified_ruby;};
 
-  patched_ls = patchExecutable.individual { name = "ls"; executable = coreutils; };
+  patched_ls = patchExecutable.individual {
+    name = "ls";
+    executable = coreutils;
+  };
 
   libreoffice_musl = libreoffice-unwrapped;
 
   patched_libreoffice = symlinkJoin {
     name = "patched_libreoffice";
-    paths = [ libreoffice_musl ];
-    buildInputs = [ binutils patchelf musl makeWrapper ];
+    paths = [libreoffice_musl];
+    buildInputs = [binutils patchelf musl makeWrapper];
     postBuild = ''
       patchelf --set-interpreter ${musl}/lib/libc.so $out/lib/libreoffice/program/soffice.bin --output $out/lib/libreoffice/program/soffice.bin-patched
       mv $out/lib/libreoffice/program/soffice.bin-patched $out/lib/libreoffice/program/soffice.bin
@@ -33,17 +56,16 @@ lib.recurseIntoAttrs rec {
   raw_clang = llvmPackages.clang;
 
   patched_clang =
-    patchExecutable.individual { executable = llvmPackages.clang.cc; } // { isClang = true; };
+    patchExecutable.individual {executable = llvmPackages.clang.cc;} // {isClang = true;};
   # compilers in Nixpkgs are not usable in Nix by themselves because
   # they do not know how to find header files and libc
   # wrapCC creates a wrapper file with all the necessary info included
   patched_clang_wrapped = wrapCC patched_clang;
 
-  patched_donothing_clang = patchExecutable.donothingWrapper { executable = llvmPackages.clang.cc; } // { isClang = true; };
+  patched_donothing_clang = patchExecutable.donothingWrapper {executable = llvmPackages.clang.cc;} // {isClang = true;};
 
-  patched_python =
-    patchExecutable.individual { executable = 
-    python3.overrideAttrs(oldAttrs: {
+  patched_python = patchExecutable.individual {
+    executable = python3.overrideAttrs (oldAttrs: {
       NIX_CFLAGS_COMPILE = "-fpie -fpic";
     });
   };
@@ -57,15 +79,14 @@ lib.recurseIntoAttrs rec {
       hash = "sha256-5npWRktvH4luT4qw6z0BJr/twQLu+2HvJ4g8cai11LA=";
     };
     sourceRoot = "${src.name}/pynamic-pyMPI-2.6a1";
-    buildInputs =
-      [ (python3.withPackages (ps: [ ps.mpi4py ])) openmpi makeWrapper ];
-    propagatedBuildInputs = [ openssh ];
+    buildInputs = [(python3.withPackages (ps: [ps.mpi4py])) openmpi makeWrapper];
+    propagatedBuildInputs = [openssh];
 
     configurePhase = ''
       # do nothing
     '';
 
-    patches = [ ../nix/patches/0001-fix-python-path.patch ];
+    patches = [../nix/patches/0001-fix-python-path.patch];
 
     postPatch = ''
       substituteInPlace Makefile.mpi4py \
@@ -94,10 +115,14 @@ lib.recurseIntoAttrs rec {
       mv pynamic_driver_mpi4py.py $out/lib
       mv *.so $out/lib
     '';
-
   };
 
   patched_pynamic = patchExecutable.individual {
+    name = "pynamic-mpi4py";
+    executable = pynamic;
+  };
+
+  patched_donothing_pynamic = patchExecutable.donothingWrapper {
     name = "pynamic-mpi4py";
     executable = pynamic;
   };
