@@ -1,4 +1,4 @@
-{ writeShellScriptBin, hyperfine, examples, lib }:
+{ writeShellScriptBin, hyperfine, examples, lib, writeText }:
 lib.recurseIntoAttrs {
   benchmark-1000000_functions =
     writeShellScriptBin "run-1000000_functions-benchmark" ''
@@ -13,14 +13,27 @@ lib.recurseIntoAttrs {
             '${examples.patched_libreoffice}/lib/libreoffice/program/soffice.bin --help' --export-json benchmark.json
   '';
 
-  benchmark-clang = writeShellScriptBin "run-clang-benchmark" ''
+  benchmark-clang = 
+  let cFile = writeText "hello.c" ''
+    int hello() { return 0; }
+  '';
+  in
+  writeShellScriptBin "run-clang-benchmark" ''
     ${hyperfine}/bin/hyperfine --warmup 3 --runs 100 \
-            '${examples.patched_clang}/bin/clang-optimized --help' \
-            '${examples.patched_clang}/bin/clang --help' --export-json benchmark.json
+            '${examples.patched_clang}/bin/clang-optimized ${cFile} -c -o /dev/null' \
+            '${examples.patched_clang}/bin/clang ${cFile} -c -o /dev/null' --export-json benchmark.json
+  '';
+
+  benchmark-clang-anghabench = writeShellScriptBin "run-clang-anghabench-benchmark" ''
+    ${hyperfine}/bin/hyperfine --warmup 3 --runs 10 --prepare 'make clean -C $HOME/code/github.com/brenocfg/AnghaBench'\
+            'CC=${examples.patched_clang}/bin/clang-optimized make -j1 NUM_FILES=100 -C $HOME/code/github.com/brenocfg/AnghaBench' \
+            'CC=${examples.patched_clang}/bin/clang make -j1 NUM_FILES=100 -C $HOME/code/github.com/brenocfg/AnghaBench' \
+            --export-json benchmark.json \
+            --output null
   '';
 
   benchmark-pynamic = writeShellScriptBin "run-pynamic-benchmark" ''
-    ${hyperfine}/bin/hyperfine --warmup 2 --runs 3 \
+    ${hyperfine}/bin/hyperfine --warmup 2 --runs 10 \
             '${examples.patched_pynamic}/bin/pynamic-mpi4py-optimized' \
             '${examples.patched_pynamic}/bin/pynamic-mpi4py' --export-json benchmark.json
   '';
