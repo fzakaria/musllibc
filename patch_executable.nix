@@ -70,8 +70,11 @@ stdenv.mkDerivation {
         patchelf --set-interpreter ${musl}/lib/libc.so ${executable}/bin/${name} --output $out/bin/${name}
         LD_PRELOAD=${donothing} RELOC_WRITE=${name}_relo.bin $out/bin/${name}
         cp ${name}_relo.bin $out/bin/${name}_relo.bin
-        makeWrapper $out/bin/${name} $out/bin/${name}-optimized \
+        makeWrapper $out/bin/${name} $out/bin/${name}-donothing-optimized \
                 --set RELOC_READ "$out/bin/${name}_relo.bin" \
+                --set LD_PRELOAD "${donothing}"
+        
+        makeWrapper $out/bin/${name} $out/bin/${name}-donothing \
                 --set LD_PRELOAD "${donothing}"
       '';
     };

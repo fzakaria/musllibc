@@ -30,9 +30,12 @@ lib.recurseIntoAttrs {
   '';
   in
   writeShellScriptBin "run-clang-benchmark" ''
-    ${hyperfine}/bin/hyperfine --warmup 3 --runs 100 \
-            '${examples.patched_donothing_clang}/bin/clang-optimized ${cFile} -c -o /dev/null' \
-            '${examples.patched_donothing_clang}/bin/clang ${cFile} -c -o /dev/null' --export-json benchmark.json
+    ${hyperfine}/bin/hyperfine --warmup 100 --runs 300 \
+            '${examples.patched_donothing_clang}/bin/clang-donothing-optimized ${cFile} -c -o /dev/null' \
+            '${examples.patched_donothing_clang}/bin/clang-donothing ${cFile} -c -o /dev/null' \
+            --output null \
+            --shell none \
+            --export-json benchmark.json
   '';
 
   benchmark-clang-anghabench = writeShellScriptBin "run-clang-anghabench-benchmark" ''
