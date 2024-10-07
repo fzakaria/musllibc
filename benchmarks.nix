@@ -24,6 +24,17 @@ lib.recurseIntoAttrs {
             '${examples.patched_clang}/bin/clang ${cFile} -c -o /dev/null' --export-json benchmark.json
   '';
 
+  benchmark-clang-donothing =
+  let cFile = writeText "hello.c" ''
+    int hello() { return 0; }
+  '';
+  in
+  writeShellScriptBin "run-clang-benchmark" ''
+    ${hyperfine}/bin/hyperfine --warmup 3 --runs 100 \
+            '${examples.patched_donothing_clang}/bin/clang-optimized ${cFile} -c -o /dev/null' \
+            '${examples.patched_donothing_clang}/bin/clang ${cFile} -c -o /dev/null' --export-json benchmark.json
+  '';
+
   benchmark-clang-anghabench = writeShellScriptBin "run-clang-anghabench-benchmark" ''
     ${hyperfine}/bin/hyperfine --warmup 3 --runs 10 --prepare 'make clean -C $HOME/code/github.com/brenocfg/AnghaBench'\
             'CC=${examples.patched_clang}/bin/clang-optimized make -j1 NUM_FILES=100 -C $HOME/code/github.com/brenocfg/AnghaBench' \

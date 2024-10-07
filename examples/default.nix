@@ -39,8 +39,14 @@ lib.recurseIntoAttrs rec {
   # wrapCC creates a wrapper file with all the necessary info included
   patched_clang_wrapped = wrapCC patched_clang;
 
+  patched_donothing_clang = patchExecutable.donothingWrapper { executable = llvmPackages.clang.cc; } // { isClang = true; };
+
   patched_python =
-    patchExecutable.individual { executable = enableDebugging python3; };
+    patchExecutable.individual { executable = 
+    python3.overrideAttrs(oldAttrs: {
+      NIX_CFLAGS_COMPILE = "-fpie -fpic";
+    });
+  };
 
   pynamic = stdenv.mkDerivation rec {
     name = "pynamic";
