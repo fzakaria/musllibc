@@ -47,13 +47,13 @@ lib.recurseIntoAttrs {
   '';
 
   benchmark-pynamic = writeShellScriptBin "run-pynamic-benchmark" ''
-    ${hyperfine}/bin/hyperfine --warmup 2 --runs 10 \
+    ${hyperfine}/bin/hyperfine --warmup 5 --runs 10 \
             '${examples.patched_pynamic}/bin/pynamic-mpi4py-optimized' \
             '${examples.patched_pynamic}/bin/pynamic-mpi4py' --export-json benchmark.json
   '';
 
   benchmark-pynamic-donothing = writeShellScriptBin "run-pynamic-benchmark" ''
-    ${hyperfine}/bin/hyperfine --warmup 2 --runs 3 \
+    ${hyperfine}/bin/hyperfine --warmup 5 --runs 10 \
             '${examples.patched_donothing_pynamic}/bin/pynamic-mpi4py-donothing-optimized' \
             '${examples.patched_donothing_pynamic}/bin/pynamic-mpi4py-donothing' \
             --output null \
