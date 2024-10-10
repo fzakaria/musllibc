@@ -13,6 +13,14 @@ lib.recurseIntoAttrs {
             '${examples.patched_libreoffice}/lib/libreoffice/program/soffice.bin --help' --export-json benchmark.json
   '';
 
+  benchmark-libreoffice-donothing = writeShellScriptBin "run-libreoffice-benchmark" ''
+    ${hyperfine}/bin/hyperfine --warmup 3 --runs 20 \
+            '${examples.patched_donothing_libreoffice}/lib/libreoffice/program/soffice.bin-donothing-optimized --help' \
+            '${examples.patched_donothing_libreoffice}/lib/libreoffice/program/soffice.bin-donothing --help' \
+            --export-json benchmark.json \
+            --output null
+  '';
+
   benchmark-clang = 
   let cFile = writeText "hello.c" ''
     int hello() { return 0; }

@@ -19,6 +19,7 @@
   libreoffice-unwrapped,
   symlinkJoin,
   binutils,
+  donothing,
 }:
 lib.recurseIntoAttrs rec {
   patched_ruby = let
@@ -50,6 +51,24 @@ lib.recurseIntoAttrs rec {
       cp soffice_relo.bin $out/lib/libreoffice/program/soffice_relo.bin
       makeWrapper $out/lib/libreoffice/program/soffice.bin $out/lib/libreoffice/program/soffice.bin-optimized \
                 --set RELOC_READ "$out/lib/libreoffice/program/soffice_relo.bin"
+    '';
+  };
+
+  patched_donothing_libreoffice = symlinkJoin {
+    name = "patched_donothing_libreoffice";
+    paths = [libreoffice_musl];
+    buildInputs = [binutils patchelf musl makeWrapper];
+    postBuild = ''
+      patchelf --set-interpreter ${musl}/lib/libc.so $out/lib/libreoffice/program/soffice.bin --output $out/lib/libreoffice/program/soffice.bin-patched
+      mv $out/lib/libreoffice/program/soffice.bin-patched $out/lib/libreoffice/program/soffice.bin
+
+      LD_PRELOAD=${donothing} RELOC_WRITE=soffice_relo.bin $out/lib/libreoffice/program/soffice.bin --help &> /dev/null
+      cp soffice_relo.bin $out/lib/libreoffice/program/soffice_relo.bin
+      makeWrapper $out/lib/libreoffice/program/soffice.bin $out/lib/libreoffice/program/soffice.bin-donothing-optimized \
+                --set RELOC_READ "$out/lib/libreoffice/program/soffice_relo.bin" \
+                --set LD_PRELOAD "${donothing}"
+      makeWrapper $out/lib/libreoffice/program/soffice.bin $out/lib/libreoffice/program/soffice.bin-donothing \
+                --set LD_PRELOAD "${donothing}"
     '';
   };
 
