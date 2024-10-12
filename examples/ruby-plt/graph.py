@@ -1,3 +1,6 @@
+#! /usr/bin/env nix-shell
+#! nix-shell -i python3 -p "python3.withPackages(ps: with ps; [plotnine scipy numpy pandas])"
+
 import pandas as pd
 import numpy as np
 from plotnine import *
@@ -86,6 +89,8 @@ df_significant = df[df['Significance'] != 'Not Significant']
 
 # Extract speedup values
 speedups = df_significant['Speedup'].values
+
+print(len(speedups))
 
 # Calculate the geometric mean of the speedups
 geometric_mean_speedup = gmean(speedups)
